@@ -77,10 +77,7 @@ static PORT_RE: LazyLock<Regex> = LazyLock::new(|| {
 async fn execute_pm3(app: &AppHandle, port: &str, cmd: &str) -> Result<String, AppError> {
     // Validate port format to prevent command injection via subprocess args
     if !PORT_RE.is_match(port) {
-        return Err(AppError::CommandFailed(format!(
-            "Invalid port: {}",
-            port
-        )));
+        return Err(AppError::CommandFailed(format!("Invalid port: {}", port)));
     }
 
     // Reject command strings containing PM3 command separators or newlines.
@@ -153,10 +150,7 @@ async fn execute_pm3(app: &AppHandle, port: &str, cmd: &str) -> Result<String, A
                 let cleaned = strip_ansi(&stdout);
                 Ok(cleaned)
             }
-            -5 | 251 => Err(AppError::Timeout(format!(
-                "PM3 timed out running: {}",
-                cmd
-            ))),
+            -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
             _ => {
                 let detail = if stderr.is_empty() {
                     strip_ansi(&stdout)
@@ -276,9 +270,10 @@ where
 
     // Store child for cancellation
     {
-        let mut lock = hf_state.child.lock().map_err(|e| {
-            AppError::CommandFailed(format!("HF state lock poisoned: {}", e))
-        })?;
+        let mut lock = hf_state
+            .child
+            .lock()
+            .map_err(|e| AppError::CommandFailed(format!("HF state lock poisoned: {}", e)))?;
         *lock = Some(child);
     }
 
@@ -308,10 +303,58 @@ fn spawn_pm3(
 ) -> Result<(tauri::async_runtime::Receiver<CommandEvent>, CommandChild), AppError> {
     let args = ["-p", port, "-f", "-c", cmd];
 
-    // Try sidecar first
-    if let Ok(sidecar_cmd) = app.shell().sidecar("binaries/proxmark3") {
-        if let Ok(result) = sidecar_cmd.args(&args).spawn() {
-            return Ok(result);
+    // Try direct binary spawn first (Tauri's externalBin places binary in same dir as executable)
+    // This uses std::process::Command with CREATE_NO_WINDOW to suppress console popups
+    if let Some(exe_path) = std::env::current_exe().ok() {
+        if let Some(dir) = exe_path.parent() {
+            let exe_name = if cfg!(target_os = "windows") {
+                "proxmark3.exe"
+            } else {
+                "proxmark3"
+            };
+
+            // Try same directory as executable (Tauri externalBin typical behavior)
+            let binary_path = dir.join(exe_name);
+            if binary_path.is_file() {
+                // Use shell spawn for streaming output (stderr/stdout events)
+                let binary_str = binary_path.to_string_lossy().into_owned();
+                #[cfg(target_os = "windows")]
+                {
+                    // On Windows, we need to use sidecar-style spawn for events
+                    // The shell plugin handles this - console window may appear briefly
+                    // but this is necessary for streaming output
+                    match app.shell().command(&binary_str).args(&args).spawn() {
+                        Ok(result) => return Ok(result),
+                        Err(_) => {}
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    match app.shell().command(&binary_str).args(&args).spawn() {
+                        Ok(result) => return Ok(result),
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    // Try sidecar (available in production builds)
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(sidecar_cmd) = app.shell().sidecar("binaries/proxmark3") {
+            if let Ok(result) = sidecar_cmd.args(&args).spawn() {
+                return Ok(result);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(sidecar_cmd) = app.shell().sidecar("binaries/proxmark3") {
+            if let Ok(result) = sidecar_cmd.args(&args).spawn() {
+                return Ok(result);
+            }
         }
     }
 
@@ -389,10 +432,7 @@ where
                 }
                 CommandEvent::Error(msg) => {
                     emit_output(app, &msg, true);
-                    return Err(AppError::CommandFailed(format!(
-                        "Process error: {}",
-                        msg
-                    )));
+                    return Err(AppError::CommandFailed(format!("Process error: {}", msg)));
                 }
                 CommandEvent::Terminated(payload) => {
                     exit_code = payload.code;
@@ -443,7 +483,11 @@ pub async fn detect_device(app: &AppHandle) -> Result<(String, String, String), 
         match execute_pm3(app, port, "hw version").await {
             Ok(output) => {
                 if let Some((model, firmware)) = parse_hw_version(&output) {
-                    emit_output(app, &format!("[+] Target acquired: {} on {}", model, port), false);
+                    emit_output(
+                        app,
+                        &format!("[+] Target acquired: {} on {}", model, port),
+                        false,
+                    );
                     emit_output(app, &format!("[+] Firmware: {}", firmware), false);
                     return Ok((port.clone(), model, firmware));
                 }
@@ -457,7 +501,14 @@ pub async fn detect_device(app: &AppHandle) -> Result<(String, String, String), 
                 // handle the mismatch and offer to flash.
                 let err_msg = e.to_string();
                 if err_msg.to_lowercase().contains("capabilities") {
-                    emit_output(app, &format!("[+] Target acquired: Proxmark3 on {} (firmware mismatch)", port), false);
+                    emit_output(
+                        app,
+                        &format!(
+                            "[+] Target acquired: Proxmark3 on {} (firmware mismatch)",
+                            port
+                        ),
+                        false,
+                    );
                     return Ok((
                         port.clone(),
                         "Proxmark3".to_string(),
@@ -469,7 +520,11 @@ pub async fn detect_device(app: &AppHandle) -> Result<(String, String, String), 
                 // from other errors. If spawn itself failed (binary not found), that
                 // affects ALL ports, so propagate immediately.
                 if err_msg.contains("Failed to spawn proxmark3") {
-                    emit_output(app, "[!!] Proxmark3 binary not found. Check installation.", true);
+                    emit_output(
+                        app,
+                        "[!!] Proxmark3 binary not found. Check installation.",
+                        true,
+                    );
                     return Err(e);
                 }
 
@@ -479,45 +534,237 @@ pub async fn detect_device(app: &AppHandle) -> Result<(String, String, String), 
     }
 
     emit_output(app, "[!!] No Proxmark3 found.", true);
-    emit_output(app, "[=] Try a different USB cable (some are charge-only)", false);
+    emit_output(
+        app,
+        "[=] Try a different USB cable (some are charge-only)",
+        false,
+    );
     emit_output(app, "[=] Check Device Manager for a COM port", false);
-    emit_output(app, "[=] PM3 Easy: may need CH340 driver (wch-ic.com)", false);
+    emit_output(
+        app,
+        "[=] PM3 Easy: may need CH340 driver (wch-ic.com)",
+        false,
+    );
     Err(AppError::DeviceNotFound)
 }
 
 fn build_port_candidates() -> Vec<String> {
+    // Get available ports from serialport and score them
+    let mut scored = Vec::new();
+
+    if let Ok(available) = serialport::available_ports() {
+        for info in available {
+            let port_str = info.port_name.clone();
+            let score = score_port(&port_str, &info.port_type);
+            scored.push((score, port_str));
+        }
+    }
+
+    // If serialport couldn't list ports (or returned none), fall back to static list
+    if scored.is_empty() {
+        scored = build_fallback_candidates();
+    }
+
+    // Sort by score descending (highest score first)
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+    scored.into_iter().map(|(_, port)| port).collect()
+}
+
+/// Score a port based on heuristics: prefer ACM over USB on Linux,
+/// lower-numbered COM ports on Windows, and known PM3 suffixes on macOS.
+fn score_port(port_name: &str, port_type: &serialport::SerialPortType) -> u32 {
+    let mut score: u32 = 0;
+
+    // Base score
+    score += 10;
+
+    // Platform-specific scoring
+    #[cfg(target_os = "linux")]
+    {
+        // Prefer ttyACM (built-in USB-serial) over ttyUSB (external adapters)
+        if port_name.contains("ttyACM") {
+            score += 50;
+        } else if port_name.contains("ttyUSB") {
+            score += 20;
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Prefer lower COM port numbers (more common for PM3 devices)
+        if let Some(num) = port_name.strip_prefix("COM") {
+            if let Ok(n) = num.parse::<u32>() {
+                score += 50;
+                // Lower numbers get higher scores
+                if n <= 10 {
+                    score += 30;
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Prefer known PM3 suffixes
+        let pm3_suffixes = ["iceman1", "14101", "14201", "14301"];
+        for suffix in pm3_suffixes {
+            if port_name.contains(suffix) {
+                score += 50;
+                break;
+            }
+        }
+    }
+
+    // Check port type if available
+    if let serialport::SerialPortType::UsbPort(info) = port_type {
+        // Award points for vendor/product IDs that match known PM3 devices
+        let known_vendors = [0x0403, 0x10C4, 0x03EB]; // FTDI, SiLabs, Atmel
+        if known_vendors.contains(&info.vid) {
+            score += 30;
+        }
+    }
+
+    score
+}
+
+/// Build fallback port list when serialport enumeration fails.
+fn build_fallback_candidates() -> Vec<(u32, String)> {
     let mut ports = Vec::new();
 
     if cfg!(target_os = "windows") {
         // Windows COM ports -- extend to 40 to cover USB hub reassignment
         for i in 1..=40 {
-            ports.push(format!("COM{}", i));
+            ports.push((20, format!("COM{}", i)));
         }
     } else if cfg!(target_os = "macos") {
         // macOS: /dev/tty.usbmodem* -- cover common PM3 suffixes
-        for suffix in &[
-            "iceman1",
-            "14101",
-            "14201",
-            "14301",
-            "1",
-            "2",
-            "3",
-        ] {
-            ports.push(format!("/dev/tty.usbmodem{}", suffix));
+        for suffix in &["iceman1", "14101", "14201", "14301", "1", "2", "3"] {
+            ports.push((30, format!("/dev/tty.usbmodem{}", suffix)));
         }
     } else {
         // Linux: /dev/ttyACM* and /dev/ttyUSB*
         for i in 0..=5 {
-            ports.push(format!("/dev/ttyACM{}", i));
-            ports.push(format!("/dev/ttyUSB{}", i));
+            ports.push((50, format!("/dev/ttyACM{}", i)));
+            ports.push((20, format!("/dev/ttyUSB{}", i)));
         }
     }
 
     ports
 }
 
-/// Attempt to run a PM3 command via the bundled sidecar binary (silent -- no emit).
+/// Run the proxmark3 binary directly using tokio::process::Command.
+/// Used for bundled binaries found via current_exe() lookup.
+async fn run_binary_direct(
+    binary_path: std::path::PathBuf,
+    port: &str,
+    cmd: &str,
+) -> Result<String, AppError> {
+    // On Windows, use std::process::Command with CREATE_NO_WINDOW to suppress console popups
+    // tokio's Command doesn't expose creation_flags, so we use std::process and wrap for async
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        
+        let mut std_command = std::process::Command::new(&binary_path);
+        std_command.args(&["-p", port, "-f", "-c", cmd]);
+        std_command.creation_flags(CREATE_NO_WINDOW);
+        std_command.stdout(std::process::Stdio::piped());
+        std_command.stderr(std::process::Stdio::piped());
+        
+        // Use tokio to wrap the sync command output
+        let output_future = tokio::process::Command::from(std_command).output();
+        let output = match timeout(PM3_COMMAND_TIMEOUT, output_future).await {
+            Err(_) => {
+                return Err(AppError::Timeout(format!(
+                    "PM3 command timed out after {}s: {}",
+                    PM3_COMMAND_TIMEOUT.as_secs(),
+                    cmd
+                )));
+            }
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                return Err(AppError::CommandFailed(format!(
+                    "Failed to run PM3 command: {}",
+                    e
+                )));
+            }
+        };
+
+        let code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        match code {
+            0 => {
+                let cleaned = strip_ansi(&stdout);
+                Ok(cleaned)
+            }
+            -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
+            _ => {
+                let detail = if stderr.is_empty() {
+                    strip_ansi(&stdout)
+                } else {
+                    strip_ansi(&stderr)
+                };
+                Err(AppError::CommandFailed(format!(
+                    "Exit code {}: {}",
+                    code, detail
+                )))
+            }
+        }
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut command = tokio::process::Command::new(binary_path);
+        command.args(&["-p", port, "-f", "-c", cmd]);
+        
+        let output_future = command.output();
+        let output = match timeout(PM3_COMMAND_TIMEOUT, output_future).await {
+            Err(_) => {
+                return Err(AppError::Timeout(format!(
+                    "PM3 command timed out after {}s: {}",
+                    PM3_COMMAND_TIMEOUT.as_secs(),
+                    cmd
+                )));
+            }
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                return Err(AppError::CommandFailed(format!(
+                    "Failed to run PM3 command: {}",
+                    e
+                )));
+            }
+        };
+
+        let code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        match code {
+            0 => {
+                let cleaned = strip_ansi(&stdout);
+                Ok(cleaned)
+            }
+            -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
+            _ => {
+                let detail = if stderr.is_empty() {
+                    strip_ansi(&stdout)
+                } else {
+                    strip_ansi(&stderr)
+                };
+                Err(AppError::CommandFailed(format!(
+                    "Exit code {}: {}",
+                    code, detail
+                )))
+            }
+        }
+    }
+}
+
+/// Attempting to run a PM3 command via the bundled sidecar binary (silent -- no emit).
 /// Returns Ok(stdout) on success, Err on any failure (sidecar not found, spawn
 /// error, non-zero exit code). Callers should fall through to PATH-based lookup
 /// on failure.
@@ -526,14 +773,40 @@ fn build_port_candidates() -> Vec<String> {
 /// directory via `bundle.resources`. The Windows DLL loader finds them
 /// automatically since they share the sidecar's directory.
 async fn try_sidecar_silent(app: &AppHandle, port: &str, cmd: &str) -> Result<String, AppError> {
+    use std::env;
+
+    // First, try to find the proxmark3 binary in the root directory (where DLLs are)
+    // This matches Tauri's externalBin behavior where the binary is placed in the root
+    if let Some(exe_path) = env::current_exe().ok() {
+        let exe_dir = exe_path.parent();
+        if let Some(dir) = exe_dir {
+            let exe_name = if cfg!(target_os = "windows") {
+                "proxmark3.exe"
+            } else {
+                "proxmark3"
+            };
+
+            // Try root directory first (DLLs are here)
+            let root_path = dir.join(exe_name);
+            if root_path.is_file() {
+                return run_binary_direct(root_path, port, cmd).await;
+            }
+
+            // Try binaries subdirectory (alternative config)
+            let binary_path = dir.join("binaries").join(exe_name);
+            if binary_path.is_file() {
+                return run_binary_direct(binary_path, port, cmd).await;
+            }
+        }
+    }
+
+    // Fall back to Tauri sidecar lookup for dev mode or bundled apps
     let sidecar = app
         .shell()
         .sidecar("binaries/proxmark3")
         .map_err(|e| AppError::CommandFailed(format!("Sidecar not available: {}", e)))?;
 
-    let output_future = sidecar
-        .args(["-p", port, "-f", "-c", cmd])
-        .output();
+    let output_future = sidecar.args(["-p", port, "-f", "-c", cmd]).output();
 
     let output = match timeout(PM3_COMMAND_TIMEOUT, output_future).await {
         Err(_) => {
@@ -561,10 +834,7 @@ async fn try_sidecar_silent(app: &AppHandle, port: &str, cmd: &str) -> Result<St
             let cleaned = strip_ansi(&stdout);
             Ok(cleaned)
         }
-        -5 | 251 => Err(AppError::Timeout(format!(
-            "PM3 timed out running: {}",
-            cmd
-        ))),
+        -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
         _ => {
             let detail = if stderr.is_empty() {
                 strip_ansi(&stdout)
@@ -608,9 +878,9 @@ fn extract_short_version(version_str: &str) -> String {
     // Find 'v' followed by a digit
     let v_pos = version_str.char_indices().find(|&(i, c)| {
         c == 'v'
-            && version_str
-                .get(i + 1..i + 2)
-                .map_or(false, |s| s.as_bytes().first().map_or(false, |b| b.is_ascii_digit()))
+            && version_str.get(i + 1..i + 2).map_or(false, |s| {
+                s.as_bytes().first().map_or(false, |b| b.is_ascii_digit())
+            })
     });
 
     if let Some((pos, _)) = v_pos {

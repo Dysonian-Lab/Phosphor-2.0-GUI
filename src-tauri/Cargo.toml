@@ -26,4 +26,5 @@ log = "0.4.29"
 env_logger = "0.11.8"
 thiserror = "1.0.69"
 chrono = { version = "0.4.43", features = ["serde"] }
+serialport = "4.7"
 
