@@ -57,5 +57,5 @@ pub fn run() {
             commands::hf_clone::cancel_hf_operation,
         ])
         .run(tauri::generate_context!())
-        .expect("error running Phosphor");
+        .expect("error running Phosphor 2.0 GUI");
 }
