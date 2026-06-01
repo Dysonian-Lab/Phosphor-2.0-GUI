@@ -1,53 +1,62 @@
-# Phosphor v1.1.0 - Fixes
+# Phosphor 2.0 GUI - Release Notes
 
-## Bug Fixes
+## What's new
 
-### 1. Proxmark3 Binary Not Found Error
-**Problem**: Application could not find the bundled proxmark3 binary, showing "[!!] ERROR - Proxmark3 binary not found."
+### Foundation: Iceman fork v4.21611
+- Upgraded the bundled Proxmark3 client to the Iceman fork v4.21611.
+- Firmware compatibility, command behavior, and feature coverage are now aligned with the current upstream PM3 baseline.
 
-**Root Cause**: 
-- Tauri's `externalBin` configuration places `proxmark3.exe` in the root install directory
-- The code was only looking in `binaries/` subdirectory for the binary
-- Runtime DLLs were in the root but the binary lookup failed
+### Hardware: iCopy-X compatibility
+- Added native support for the iCopy-X device.
+- USB driver / enumeration is handled automatically via the improved port scoring.
 
-**Fix**: Updated `try_sidecar_silent()` in `connection.rs` to check BOTH:
-- Root directory (where DLLs are located) - checked FIRST
-- `binaries/` subdirectory (alternative configuration)
+### Detection: Intelligent port scoring
+- Dynamic COM port enumeration with heuristic scoring.
+- Windows COM ports: +50 base score, +30 extra for COM1-10.
+- USB vendor matching (FTDI/SiLabs/Atmel): +30 bonus points.
+- Result: faster, more reliable Proxmark3 discovery.
 
-### 2. Console Popup Windows
-**Problem**: Each proxmark3 operation spawned a console window popup.
+### Advanced Tools tab
+Direct, button-driven access to professional PM3 commands:
+- ISO 14443-B reader
+- ISO 15693 reader
+- Felica reader
+- iCLASS SE/OS reader
+- LEGIC reader
+- Lua Script Editor (CodeMirror-based with syntax highlighting, line numbers, session-style workflow)
+- Firmware flashing (RDV4, RDV4+BT, Generic)
+- Hardware tuning (`hw tune`, `lf tune`)
+- Antenna measurement (`hw measure`)
 
-**Fix**: Added Windows `CREATE_NO_WINDOW` flag (0x08000000) to suppress console windows when spawning proxmark3 processes.
+### Error handling
+- Tauri error objects now surface as readable PM3 command output.
+- No more `[object Object]` in the UI.
 
-### 3. Serial Port Detection
-**Problem**: Port detection used a static list without prioritization.
+## Command behavior notes
 
-**Fix**: Implemented dynamic port enumeration using the `serialport` crate with heuristic scoring:
-- Windows COM ports: +50 base score, +30 extra for COM1-10 (lower ports = higher priority)
-- USB vendor matching (FTDI/SiLabs/Atmel): +30 bonus points
-- Linux: ttyACM gets +50, ttyUSB gets +20
-- macOS: Known PM3 suffixes get +50
+- **No tag found**: Several `hf` / `lf` information commands return non-zero exit codes when no tag is present. This is expected PM3 behavior and is now handled gracefully.
+- **`lf tune` syntax**: the command takes no positional argument. Do not append a value.
+- **`hw tune`**: informational only; it does not actively tune the antenna.
+- **iCLASS**: some commands hang without a built-in timeout. If a command appears frozen, cancel the connection and retry.
 
-## Files Changed
-- `src-tauri/src/pm3/connection.rs` - Binary lookup, port scoring, console suppression
-- `src-tauri/Cargo.toml` - Added `serialport = "4.7"` dependency
+## Portable structure
 
-## Portable Distribution Structure
 ```
 portable/
-├── proxmark3.exe          # Binary in root (accesses DLLs)
 ├── phosphor.exe
-├── *.dll                  # 129 MinGW runtime DLLs
-├── resources/             # Frontend assets (index.html + assets/)
-├── binaries/              # Also contains proxmark3.exe for compatibility
+├── proxmark3.exe
+├── *.dll
+├── resources/
 ├── firmware/
-├── platforms/
-└── pm3-libs/
+│   ├── rdv4/
+│   ├── rdv4-bt/
+│   └── generic/
+├── pm3-libs/
+└── platforms/
 ```
 
-## Testing
-Tested on Windows 10 with Proxmark3 connected via USB. The application:
-- Launches successfully with the bundled frontend
-- Finds and executes proxmark3 binary without errors
-- Detects connected Proxmark3 device via serial port scoring
-- Runs commands without console popup windows
+## Verified
+
+- Windows 10 x64 with Proxmark3 USB + bundled client.
+- Missing binary / console popup issues resolved.
+- Serial port detection confirmed with heuristic scoring.
