@@ -14,7 +14,7 @@ interface BootLine {
 }
 
 const BOOT_LINES: BootLine[] = [
-  { text: '[=] POST..................... PHOSPHOR SYSTEMS v1.1.0', color: 'var(--green-dim)' },
+  { text: '[=] POST..................... PHOSPHOR SYSTEMS v2.0.0', color: 'var(--green-dim)' },
   { text: '[+] Card database............ 34 types loaded', color: 'var(--green-mid)' },
   { text: '[+] RF antenna............... calibrated', color: 'var(--green-mid)' },
   { text: '[+] USB...................... ports enumerated', color: 'var(--green-mid)' },
@@ -47,7 +47,7 @@ export function BootSequence({ onComplete }: BootSequenceProps) {
 
   const titleText = phase >= 2 ? 'PHOSPHOR' : '';
   const displayedTitle = useTypewriter(titleText, 55);
-  const subtitleText = phase >= 2 ? 'v1.1.0 // PROXMARK3 INTERFACE' : '';
+  const subtitleText = phase >= 2 ? 'v2.0.0 // PROXMARK3 INTERFACE' : '';
   const displayedSubtitle = useTypewriter(
     displayedTitle === titleText ? subtitleText : '',
     18,
