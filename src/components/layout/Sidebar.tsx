@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSfx } from '../../hooks/useSfx';
 
-export type TabId = 'scan' | 'write' | 'erase' | 'saved' | 'history' | 'settings';
+export type TabId = 'scan' | 'write' | 'erase' | 'saved' | 'history' | 'settings' | 'advanced';
 
 interface SidebarProps {
   activeTab: TabId;
@@ -18,6 +18,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'saved', label: 'SAVED' },
   { id: 'history', label: 'HISTORY' },
   { id: 'settings', label: 'SETTINGS' },
+  { id: 'advanced', label: 'ADVANCED' },
 ];
 
 const SEPARATOR = '\u2500'.repeat(16); // Unicode box-drawing horizontal line
