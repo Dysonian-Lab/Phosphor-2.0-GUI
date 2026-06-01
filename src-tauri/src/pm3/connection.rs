@@ -316,13 +316,9 @@ fn spawn_pm3(
             // Try same directory as executable (Tauri externalBin typical behavior)
             let binary_path = dir.join(exe_name);
             if binary_path.is_file() {
-                // Use shell spawn for streaming output (stderr/stdout events)
                 let binary_str = binary_path.to_string_lossy().into_owned();
                 #[cfg(target_os = "windows")]
                 {
-                    // On Windows, we need to use sidecar-style spawn for events
-                    // The shell plugin handles this - console window may appear briefly
-                    // but this is necessary for streaming output
                     match app.shell().command(&binary_str).args(&args).spawn() {
                         Ok(result) => return Ok(result),
                         Err(_) => {}

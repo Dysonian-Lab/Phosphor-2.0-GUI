@@ -16,6 +16,7 @@ pub async fn run_script(
     app: AppHandle,
     machine: State<'_, Mutex<crate::state::WizardMachine>>,
     script: String,
+    args: Option<String>,
 ) -> Result<String, AppError> {
     // Grab the currently‑connected port from the wizard state
     let port = {
@@ -33,17 +34,21 @@ pub async fn run_script(
         port
     };
 
-    // Write the script to a temp file in the scripts directory, then run it by filename.
-    let script_dir = get_script_dir(&app)?;
+    // Write the script to a temp file in the executable directory, then run it by filename.
+    let script_dir = get_exe_dir(&app)?;
     if !script_dir.exists() {
         fs::create_dir_all(&script_dir)
-            .map_err(|e| AppError::CommandFailed(format!("Failed to create script directory: {}", e)))?;
+            .map_err(|e| AppError::CommandFailed(format!("Failed to create executable directory: {}", e)))?;
     }
     let temp_name = format!("phosphor_inline_{}.lua", std::process::id());
     let temp_path = script_dir.join(&temp_name);
     fs::write(&temp_path, script)
         .map_err(|e| AppError::CommandFailed(format!("Failed to write temp script: {}", e)))?;
-    let cmd = format!("script run {}", temp_name);
+
+    let cmd = match args {
+        Some(a) if !a.trim().is_empty() => format!("script run {} {}", temp_name, a.trim()),
+        _ => format!("script run {}", temp_name),
+    };
 
     let raw = connection::run_command(&app, &port, &cmd).await?;
 
@@ -117,9 +122,8 @@ pub async fn write_script(
     Ok(())
 }
 
-/// Helper function to get the script directory path.
+/// Helper function to get the script directory path (.proxmark3/scripts).
 fn get_script_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
-    // Get the current executable's directory
     let exe_path = env::current_exe()
         .map_err(|e| AppError::CommandFailed(format!("Failed to get current executable path: {}", e)))?;
     let mut script_dir = exe_path.parent()
@@ -128,4 +132,13 @@ fn get_script_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
     script_dir.push(".proxmark3");
     script_dir.push("scripts");
     Ok(script_dir)
+}
+
+/// Helper function to get the executable directory (for temp script runs).
+fn get_exe_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    let exe_path = env::current_exe()
+        .map_err(|e| AppError::CommandFailed(format!("Failed to get current executable path: {}", e)))?;
+    Ok(exe_path.parent()
+        .ok_or_else(|| AppError::CommandFailed("Failed to get parent directory of executable".to_string()))?
+        .to_path_buf())
 }
