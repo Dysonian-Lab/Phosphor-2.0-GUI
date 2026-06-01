@@ -33,13 +33,21 @@ pub async fn run_script(
         port
     };
 
-    // Prepare the script for inline execution: replace newlines with \n as the PM3 expects.
-    let escaped = script.replace('\n', "\\n");
-    let cmd = format!("script run - {}", escaped);
+    // Write the script to a temp file in the scripts directory, then run it by filename.
+    let script_dir = get_script_dir(&app)?;
+    if !script_dir.exists() {
+        fs::create_dir_all(&script_dir)
+            .map_err(|e| AppError::CommandFailed(format!("Failed to create script directory: {}", e)))?;
+    }
+    let temp_name = format!("phosphor_inline_{}.lua", std::process::id());
+    let temp_path = script_dir.join(&temp_name);
+    fs::write(&temp_path, script)
+        .map_err(|e| AppError::CommandFailed(format!("Failed to write temp script: {}", e)))?;
+    let cmd = format!("script run {}", temp_name);
 
-    // Execute the PM3 command.
     let raw = connection::run_command(&app, &port, &cmd).await?;
 
+    let _ = fs::remove_file(&temp_path);
     Ok(raw)
 }
 
