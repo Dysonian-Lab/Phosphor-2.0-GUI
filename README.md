@@ -3,6 +3,10 @@
 Desktop GUI for Proxmark3. Scan, clone and manage RFID/NFC cards without touching the command line.
 
 ![Windows](https://img.shields.io/badge/Windows-10%2B-blue) ![License](https://img.shields.io/badge/license-GPL--3.0-green) ![Version](https://img.shields.io/badge/version-2.0.0-brightgreen)
+## Latest release
+
+**v2.0.0** is available. Download the portable zip or installer from [Releases](../../releases), and read the full [release notes](../../releases/tag/v2.0.0).
+
 
 ## What it does
 
