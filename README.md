@@ -3,10 +3,6 @@
 Desktop GUI for Proxmark3. Scan, clone and manage RFID/NFC cards without touching the command line.
 
 ![Windows](https://img.shields.io/badge/Windows-10%2B-blue) ![License](https://img.shields.io/badge/license-GPL--3.0-green) ![Version](https://img.shields.io/badge/version-2.0.0-brightgreen)
-## Latest release
-
-**v2.0.0** is available. Download the portable zip or installer from [Releases](../../releases), and read the full [release notes](../../releases/tag/v2.0.0).
-
 
 ## What it does
 
@@ -30,6 +26,25 @@ Phosphor wraps the Proxmark3 client into a visual wizard. You plug in your Proxm
   - Hardware tuning (`hw tune`, `lf tune`)
   - Antenna measurement (`hw measure`)
 - **Improved error display** — Tauri errors surface as readable PM3 output instead of `[object Object]`
+
+
+## Release notes
+
+### Important notice (July 5, 2026)
+
+The May 31, 2026 release incorrectly showed **v1.1.0** in file properties. This was caused by stale build artifacts being packaged during the release process. The issue has been fixed by cleaning the build cache and rebuilding.
+
+**If you downloaded Phosphor 2.0.0 on or before July 5, 2026**, please re-download to obtain the correct **v2.0.0** build.
+
+### Version naming fix
+
+The portable release artifact was corrected to match the release script (`create_release.sh`):
+- **Previous output**: `compiled-deliverable/Phosphor_2.0.0_Windows_Portable.zip`
+- **Correct output**: `phosphor/release/Phosphor_2.0_GUI_v2.0.0_Windows_Portable.zip`
+
+`build_portable.ps1` now:
+1. Creates `phosphor/release/` if it does not exist.
+2. Writes the portable zip to the path expected by `create_release.sh`.
 
 ## Supported cards
 
