@@ -1,8 +1,8 @@
-# Phosphor 2.0 GUI
+# Phosphor 2.2 GUI
 
 Desktop GUI for Proxmark3. Scan, clone and manage RFID/NFC cards without touching the command line.
 
-![Windows](https://img.shields.io/badge/Windows-10%2B-blue) ![License](https://img.shields.io/badge/license-GPL--3.0-green) ![Version](https://img.shields.io/badge/version-2.0.0-brightgreen)
+![Windows](https://img.shields.io/badge/Windows-10%2B-blue) ![License](https://img.shields.io/badge/license-GPL--3.0-green) ![Version](https://img.shields.io/badge/version-2.2.0-brightgreen)
 
 ## What it does
 
@@ -10,41 +10,12 @@ Phosphor wraps the Proxmark3 client into a visual wizard. You plug in your Proxm
 
 **LF (125 kHz)** cards are cloned in seconds. **HF (13.56 MHz)** cards like MIFARE Classic go through automatic key recovery (autopwn) with real-time progress, then write to a magic card.
 
-## What's new in 2.0.0
+## What's new in 2.2.0
 
-- **Iceman fork v4.21611** — upgraded PM3 firmware base for better compatibility and reliability
-- **iCopy-X support** — native compatibility with the upgraded iCopy-X hardware
-- **Intelligent port scoring** — faster Proxmark3 detection across COM, USB FTDI/SiLabs/Atmel adapters
-- **Advanced Tools tab** — direct access to professional PM3 commands:
-  - ISO 14443-B reader
-  - ISO 15693 reader
-  - Felica reader
-  - iCLASS SE/SEOS reader
-  - LEGIC reader
-  - Lua Script Editor (open, edit, save, run scripts on-device)
-  - Firmware flashing (RDV4, RDV4+BT, Generic)
-  - Hardware tuning (`hw tune`, `lf tune`)
-  - Antenna measurement (`hw measure`)
-- **Improved error display** — Tauri errors surface as readable PM3 output instead of `[object Object]`
-
-
-## Release notes
-
-### Important notice (July 5, 2026)
-
-The May 31, 2026 release incorrectly showed **v1.1.0** in file properties. This was caused by stale build artifacts being packaged during the release process. The issue has been fixed by cleaning the build cache and rebuilding.
-
-**If you downloaded Phosphor 2.0.0 on or before July 5, 2026**, please re-download to obtain the correct **v2.0.0** build.
-
-### Version naming fix
-
-The portable release artifact was corrected to match the release script (`create_release.sh`):
-- **Previous output**: `compiled-deliverable/Phosphor_2.0.0_Windows_Portable.zip`
-- **Correct output**: `phosphor/release/Phosphor_2.0_GUI_v2.0.0_Windows_Portable.zip`
-
-`build_portable.ps1` now:
-1. Creates `phosphor/release/` if it does not exist.
-2. Writes the portable zip to the path expected by `create_release.sh`.
+- **Iceman fork v4.23346** — upgraded PM3 firmware base to the latest upstream
+- **CAPABILITIES_VERSION 11** — client and firmware must be flashed as a matched pair
+- **New Advanced tab commands** — Calypso, Felica sim, Trovan, Thinfilm sniff, MAD read/write/verify/decode/encode, NFC encode, MFU NDEF write/format, MFDES eload/esave/eview/dump/view/etest/sim/chk/detect, iCLASS legbrute, 14B rdbl/ctrdbl/view --selftest
+- **Command alignment** — `hf mf cchk` + `hf mf aeschk` merged into `hf mf chk`; `hf mfdes chk` now no-arg; `hf 14b valid` removed
 
 ## Supported cards
 
@@ -67,11 +38,11 @@ T5577 (LF), Gen1a, Gen2/CUID, Gen3, Gen4 GTU, Gen4 GDM/USCUID (HF)
 - USB cable (data cable, not charge-only)
 - Compatible with the upgraded icopy-x hardware
 
-Proxmark3 firmware v4.21611+ recommended (tested with Iceman fork v4.21611). Phosphor bundles its own PM3 client binary, so you don't need a separate Proxmark3 installation.
+Proxmark3 firmware v4.23346+ recommended (tested with Iceman fork v4.23346). Phosphor bundles its own PM3 client binary, so you don't need a separate Proxmark3 installation.
 
 ## How to run on a clean Windows machine
 
-1. Download `Phosphor_2.0_GUI_v2.0.0_Windows_Portable.zip` from [Releases](../../releases)
+1. Download `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` from [Releases](../../releases)
 2. Extract the `.zip` to any folder (e.g., `C:\Tools\Phosphor`)
 3. Plug in your Proxmark3 via USB
 4. Double-click `phosphor.exe` to launch
@@ -89,7 +60,7 @@ Phosphor uses Tauri with the OS WebView. Windows 10 May 2020 Update (1903+) ship
 ### Portable layout
 
 ```
-Phosphor_2.0_GUI_v2.0.0_Windows_Portable/
+Phosphor_2.2_GUI_v2.2.0_Windows_Portable/
 ├── phosphor.exe
 ├── proxmark3.exe
 ├── *.dll
@@ -104,7 +75,7 @@ Phosphor_2.0_GUI_v2.0.0_Windows_Portable/
 
 ## Installation (setup-based)
 
-1. Download `Phosphor_2.0_GUI_2.0.0_x64-setup.exe` from [Releases](../../releases)
+1. Download `Phosphor_2.2.0_x64-setup.exe` from [Releases](../../releases)
 2. Run the installer
 3. Plug in your Proxmark3
 4. Launch Phosphor
