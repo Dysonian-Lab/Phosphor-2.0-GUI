@@ -1,6 +1,8 @@
 pub mod blank;
+pub mod dump;
 pub mod device;
 pub mod erase;
+pub mod emrtd;
 pub mod firmware;
 pub mod hf_clone;
 pub mod history;
@@ -13,6 +15,8 @@ pub mod raw;
 pub mod saved;
 pub mod scan;
 pub mod script;
+pub mod smartcard;
+pub mod trace;
 pub mod tuning;
 pub mod antenna;
 pub mod wizard;

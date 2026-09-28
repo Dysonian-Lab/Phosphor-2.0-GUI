@@ -25,10 +25,24 @@ dist-ssr
 
 # Sidecar binaries + DLLs (GPL — download from Iceman fork releases)
 src-tauri/binaries/*.exe
+src-tauri/binaries/*.dll
 src-tauri/pm3-libs/
+
+# Placeholder dirs created to satisfy tauri.conf.json resource globs
+/pm3-libs/
+/firmware/
 
 # Firmware .elf files (download from proxmarkbuilds.org)
 src-tauri/firmware/
 
 CLAUDE.md
 .claude/
+
+# Local build output / scratch
+output.txt
+*.bak
+*.backup
+*.backup2
+
+# Locally staged release artifacts (binaries/installer zips) - published via GitHub Releases
+release/

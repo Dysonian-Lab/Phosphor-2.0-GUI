@@ -70,12 +70,12 @@ pub async fn scan_card(
                 let mut m = machine.lock().map_err(|e| {
                     AppError::CommandFailed(format!("State lock poisoned: {}", e))
                 })?;
-                m.transition(WizardAction::ReportError {
-                    message: e.to_string(),
-                    user_message: "Scan failed. Check device connection.".to_string(),
-                    recoverable: true,
-                    recovery_action: Some(RecoveryAction::Reconnect),
-                })?;
+            m.transition(WizardAction::ReportError {
+                message: e.to_string(),
+                user_message: "Scan failed. Check device connection.".to_string(),
+                recoverable: true,
+                recovery_action: Some(RecoveryAction::Retry),
+            })?;
                 Ok(m.current.clone())
             } else {
                 let mut m = machine.lock().map_err(|e| {

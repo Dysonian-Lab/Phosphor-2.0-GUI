@@ -20,10 +20,14 @@ fn get_port(machine: &State<'_, Mutex<WizardMachine>>) -> Result<String, AppErro
     let m = machine.lock().map_err(|e| {
         AppError::CommandFailed(format!("State lock poisoned: {}", e))
     })?;
-    match &m.current {
-        WizardState::DeviceConnected { port, .. } => Ok(port.clone()),
-        _ => Err(AppError::InvalidTransition(
-            "No device connected".to_string(),
-        )),
+
+    if let WizardState::DeviceConnected { port, .. } = &m.current {
+        return Ok(port.clone());
     }
+
+    if let Some(port) = &m.port {
+        return Ok(port.clone());
+    }
+
+    Err(AppError::InvalidTransition("No device connected".to_string()))
 }

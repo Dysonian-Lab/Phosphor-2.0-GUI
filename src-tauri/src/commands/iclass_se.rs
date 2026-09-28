@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::error::AppError;
 use crate::pm3::connection;
+use crate::state::WizardMachine;
 
 // Use the IclassSeInfo defined in lib.rs
 use crate::IclassSeInfo;
@@ -12,26 +13,14 @@ use crate::IclassSeInfo;
 #[tauri::command]
 pub async fn iclass_se_info(
     app: AppHandle,
-    machine: State<'_, Mutex<crate::state::WizardMachine>>,
+    machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<IclassSeInfo, AppError> {
-    // Grab the currently‑connected port from the wizard state
-    let port = {
-        let m = machine.lock().map_err(|e| {
-            AppError::CommandFailed(format!("State lock poisoned: {}", e))
-        })?;
-        let port = match &m.current {
-            crate::state::WizardState::DeviceConnected { port, .. } => port.clone(),
-            _ => {
-                return Err(AppError::InvalidTransition(
-                    "No device connected".to_string(),
-                ));
-            }
-        };
-        port
-    };
+    // Use the shared get_port helper so the Advanced tab works after a scan
+    // without forcing the user to click Back first.
+    let port = get_port(&machine)?;
 
     // Execute the PM3 command - relies on built-in timeout to prevent hanging
-    let raw = connection::run_command(&app, &port, "hf iclass info").await?;
+    let raw = connection::run_command_quick(&app, &port, "hf iclass info").await?;
 
     // Parse the output – adjust to match actual PM3 output.
     let info = parse_iclass_se_output(&raw)?;
@@ -62,4 +51,20 @@ fn parse_iclass_se_output(output: &str) -> Result<IclassSeInfo, AppError> {
         atqa: atqa.unwrap_or_default(),
         // add more fields as you discover them (e.g., SAK, etc.)
     })
+}
+
+fn get_port(machine: &State<'_, Mutex<WizardMachine>>) -> Result<String, AppError> {
+    let m = machine.lock().map_err(|e| {
+        AppError::CommandFailed(format!("State lock poisoned: {}", e))
+    })?;
+
+    if let crate::state::WizardState::DeviceConnected { port, .. } = &m.current {
+        return Ok(port.clone());
+    }
+
+    if let Some(port) = &m.port {
+        return Ok(port.clone());
+    }
+
+    Err(AppError::InvalidTransition("No device connected".to_string()))
 }

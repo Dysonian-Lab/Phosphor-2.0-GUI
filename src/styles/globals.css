@@ -59,20 +59,36 @@ html, body, #root {
   border-radius: 0 !important;
 }
 
+/* Button styling */
+button {
+  background: var(--bg-surface);
+  color: var(--green-bright);
+  border: 1px solid var(--green-bright);
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  cursor: pointer;
+}
+button:hover {
+  background: var(--bg-highlight);
+  border-color: var(--green-mid);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-
 ::-webkit-scrollbar-track {
   background: var(--bg-void);
 }
-
 ::-webkit-scrollbar-thumb {
   background: var(--text-dim);
 }
-
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }

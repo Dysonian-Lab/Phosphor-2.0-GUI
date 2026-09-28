@@ -6,56 +6,58 @@ use crate::pm3::connection;
 use crate::state::{WizardMachine, WizardState};
 use crate::pm3::command_builder;
 
-/// Run `smart pps` — ISO 7816-3 PPS exchange (RDV4 smartcard module required).
+/// Run `hf emrtd info` — tag information (offline with --dir).
 #[tauri::command]
-pub async fn smart_pps(
+pub async fn hf_emrtd_info(
     app: AppHandle,
     machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<String, AppError> {
     let port = get_port(&machine)?;
-    connection::run_command(&app, &port, command_builder::build_smart_pps()).await
+    connection::run_command_quick(&app, &port, command_builder::build_hf_emrtd_info()).await
 }
 
-/// Run `smart pps --t0` — select T=0 protocol.
+/// Run `hf emrtd dump` — dump eMRTD files to binary files.
 #[tauri::command]
-pub async fn smart_pps_t0(
+pub async fn hf_emrtd_dump(
     app: AppHandle,
     machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<String, AppError> {
     let port = get_port(&machine)?;
-    connection::run_command(&app, &port, command_builder::build_smart_pps_t0()).await
+    connection::run_command(&app, &port, command_builder::build_hf_emrtd_dump()).await
 }
 
-/// Run `smart pps --t1` — select T=1 protocol.
+/// Run `hf emrtd list` — list ISO 14443A/7816 history (offline, no device needed).
 #[tauri::command]
-pub async fn smart_pps_t1(
+pub async fn hf_emrtd_list(
     app: AppHandle,
     machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<String, AppError> {
     let port = get_port(&machine)?;
-    connection::run_command(&app, &port, command_builder::build_smart_pps_t1()).await
+    connection::run_command(&app, &port, command_builder::build_hf_emrtd_list()).await
 }
 
-/// Run `smart pps --ta1 <hex>` — negotiate TA1 byte.
+/// Run `hf emrtd test` — offline regression tests (no device needed).
 #[tauri::command]
-pub async fn smart_pps_ta1(
+pub async fn hf_emrtd_test(
     app: AppHandle,
     machine: State<'_, Mutex<WizardMachine>>,
-    ta1: String,
 ) -> Result<String, AppError> {
     let port = get_port(&machine)?;
-    let cmd = command_builder::build_smart_pps_ta1(&ta1);
-    connection::run_command(&app, &port, &cmd).await
+    connection::run_command(&app, &port, command_builder::build_hf_emrtd_test()).await
 }
 
 fn get_port(machine: &State<'_, Mutex<WizardMachine>>) -> Result<String, AppError> {
     let m = machine.lock().map_err(|e| {
         AppError::CommandFailed(format!("State lock poisoned: {}", e))
     })?;
-    match &m.current {
-        WizardState::DeviceConnected { port, .. } => Ok(port.clone()),
-        _ => Err(AppError::InvalidTransition(
-            "No device connected".to_string(),
-        )),
+
+    if let WizardState::DeviceConnected { port, .. } = &m.current {
+        return Ok(port.clone());
     }
+
+    if let Some(port) = &m.port {
+        return Ok(port.clone());
+    }
+
+    Err(AppError::InvalidTransition("No device connected".to_string()))
 }

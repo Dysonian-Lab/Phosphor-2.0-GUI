@@ -593,6 +593,7 @@ export const wizardMachine = setup({
           target: 'deviceConnected',
           actions: assign(() => clearCardFields),
         },
+        DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
         RESET: { target: 'idle', actions: assign(() => initialContext) },
       },
     },
@@ -656,6 +657,7 @@ export const wizardMachine = setup({
           target: 'deviceConnected',
           actions: assign(() => clearCardFields),
         },
+        DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
         RESET: { target: 'idle', actions: assign(() => initialContext) },
       },
     },
@@ -726,6 +728,7 @@ export const wizardMachine = setup({
       },
       on: {
         RESET: { target: 'idle', actions: assign(() => initialContext) },
+        DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
       },
     },
 
@@ -744,6 +747,7 @@ export const wizardMachine = setup({
           }),
         },
         RESET: { target: 'idle', actions: assign(() => initialContext) },
+        DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
       },
     },
 
@@ -806,6 +810,7 @@ export const wizardMachine = setup({
           }),
         },
         RESET: { target: 'idle', actions: assign(() => initialContext) },
+        DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
       },
     },
 
@@ -854,6 +859,7 @@ export const wizardMachine = setup({
       },
       on: {
         RESET: { target: 'idle', actions: assign(() => initialContext) },
+        DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
       },
     },
 
@@ -869,6 +875,7 @@ export const wizardMachine = setup({
         // No WRITE transition: Rust FSM has no VerificationComplete → WaitingForBlank path.
         // On failed verification, user must RESET and start over.
         RESET: { target: 'idle', actions: assign(() => initialContext) },
+        DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
       },
     },
 

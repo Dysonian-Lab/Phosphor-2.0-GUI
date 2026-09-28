@@ -12,13 +12,13 @@ interface SidebarProps {
 }
 
 const TABS: { id: TabId; label: string }[] = [
-  { id: 'scan', label: 'SCAN' },
-  { id: 'write', label: 'WRITE' },
-  { id: 'erase', label: 'ERASE' },
-  { id: 'saved', label: 'SAVED' },
-  { id: 'history', label: 'HISTORY' },
-  { id: 'settings', label: 'SETTINGS' },
-  { id: 'advanced', label: 'ADVANCED' },
+    { id: 'scan', label: 'SCAN' },
+    { id: 'write', label: 'WRITE' },
+    { id: 'erase', label: 'ERASE' },
+    { id: 'saved', label: 'SAVED' },
+    { id: 'history', label: 'HISTORY' },
+    { id: 'settings', label: 'SETTINGS' },
+    { id: 'advanced', label: 'ADVANCED' },
 ];
 
 const SEPARATOR = '\u2500'.repeat(16); // Unicode box-drawing horizontal line

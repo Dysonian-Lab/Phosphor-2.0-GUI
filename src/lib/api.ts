@@ -277,3 +277,23 @@ export async function deleteSavedCard(id: number): Promise<void> {
 export async function runRawCommand(port: string, command: string): Promise<string> {
   return invoke<string>('run_raw_command', { port, command });
 }
+
+// ── Dump File Discovery ──────────────────────────────────────────────
+
+export interface DumpFileEntry {
+  name: string;
+  path: string;
+  size_bytes: number;
+  modified_ms: number;
+}
+
+/**
+ * List dump files available in the app directory.
+ *
+ * PM3 writes dumps to the current working directory at runtime, which in the
+ * portable build is the executable directory (e.g. `hf-mf-01020304-dump.bin`).
+ * This scans the exe dir and `.proxmark3/` for PM3 dump files, newest first.
+ */
+export async function listDumpFiles(): Promise<DumpFileEntry[]> {
+  return invoke<DumpFileEntry[]>('list_dump_files');
+}

@@ -602,6 +602,26 @@ pub fn build_hf_14a_info() -> &'static str {
     "hf 14a info"
 }
 
+/// Run `hf 14a reader -n 1` — single poll for ISO14443a tag.
+/// Returns UID, ATQA, SAK if a card is found, or empty if no card detected.
+/// For continuous signal strength, use `build_hf_14a_reader_continuous()` instead.
+pub fn build_hf_14a_reader_single() -> &'static str {
+    "hf 14a reader -n 1"
+}
+
+/// Run `hf 14a reader -n <count>` — poll for ISO14443a tag multiple times.
+/// Returns success rate and card details. Use for measuring read reliability at different positions.
+pub fn build_hf_14a_reader_multiple(count: u32) -> String {
+    format!("hf 14a reader -n {}", count)
+}
+
+/// Run `hf 14a reader -@` — continuous reader mode (interactive).
+/// Requires interactive terminal (press Enter/pm3 button to stop).
+/// NOT suitable for batch mode.
+pub fn build_hf_14a_reader_continuous() -> &'static str {
+    "hf 14a reader -@"
+}
+
 pub fn build_hf_mf_info() -> &'static str {
     "hf mf info"
 }
@@ -616,6 +636,264 @@ pub fn build_hf_iclass_info() -> &'static str {
 
 pub fn build_hf_mfdes_info() -> &'static str {
     "hf mfdes info"
+}
+
+// ---------------------------------------------------------------------------
+// HF MF view v4.23346 (RKF / VIGIK / HID PACS decode)
+// ---------------------------------------------------------------------------
+
+/// `hf mf view -f <file>` — decode a MIFARE Classic dump file (RKF/VIGIK/HID PACS).
+pub fn build_hf_mf_view(file: &str) -> String {
+    format!("hf mf view -f {}", file)
+}
+
+/// `hf mf view --selftest` — run the dump parser self tests.
+pub fn build_hf_mf_view_selftest() -> &'static str {
+    "hf mf view --selftest"
+}
+
+// ---------------------------------------------------------------------------
+// HF 14b view v4.23346 (MyKey / COGES decode on SRIX4K)
+// ---------------------------------------------------------------------------
+
+/// `hf 14b view -f <file>` — decode a SRIX4K dump (MyKey/COGES).
+pub fn build_hf_14b_view(file: &str) -> String {
+    format!("hf 14b view -f {}", file)
+}
+
+// ---------------------------------------------------------------------------
+// Smart card v4.23346 (PPS — ISO 7816-3 protocol parameter selection)
+// ---------------------------------------------------------------------------
+
+/// `smart pps` — negotiate PPS with the card (RDV4 smartcard module required).
+pub fn build_smart_pps() -> &'static str {
+    "smart pps"
+}
+
+/// `smart pps --t0` — select T=0 protocol.
+pub fn build_smart_pps_t0() -> &'static str {
+    "smart pps --t0"
+}
+
+/// `smart pps --t1` — select T=1 protocol.
+pub fn build_smart_pps_t1() -> &'static str {
+    "smart pps --t1"
+}
+
+/// `smart pps --ta1 <hex>` — negotiate TA1 byte.
+pub fn build_smart_pps_ta1(ta1: &str) -> String {
+    format!("smart pps --ta1 {}", ta1)
+}
+
+// ---------------------------------------------------------------------------
+// HF eMRTD v4.23346 (PACE-CAM passport reading)
+// ---------------------------------------------------------------------------
+
+/// `hf emrtd info` — tag information (offline with --dir).
+pub fn build_hf_emrtd_info() -> &'static str {
+    "hf emrtd info"
+}
+
+/// `hf emrtd dump` — dump eMRTD files.
+pub fn build_hf_emrtd_dump() -> &'static str {
+    "hf emrtd dump"
+}
+
+/// `hf emrtd list` — list ISO 14443A/7816 history.
+pub fn build_hf_emrtd_list() -> &'static str {
+    "hf emrtd list"
+}
+
+/// `hf emrtd test` — offline regression tests for PACE / secure messaging.
+pub fn build_hf_emrtd_test() -> &'static str {
+    "hf emrtd test"
+}
+
+// ---------------------------------------------------------------------------
+// Trace v4.23346
+// ---------------------------------------------------------------------------
+
+/// `trace clear` — clear the client-side trace buffer.
+pub fn build_trace_clear() -> &'static str {
+    "trace clear"
+}
+
+// ---------------------------------------------------------------------------
+// HF 14a antifuzz v4.23346
+// ---------------------------------------------------------------------------
+
+/// `hf 14a antifuzz` — fuzz the ISO14443a anticollision phase.
+pub fn build_hf_14a_antifuzz() -> &'static str {
+    "hf 14a antifuzz"
+}
+
+/// `hf 14a antifuzz --coll` — collision storm mode.
+pub fn build_hf_14a_antifuzz_coll() -> &'static str {
+    "hf 14a antifuzz --coll"
+}
+
+// ---------------------------------------------------------------------------
+// LF T55xx v4.23346 additional commands
+// ---------------------------------------------------------------------------
+
+/// `lf t55xx set config` — configure T55xx tag parameters.
+pub fn build_lf_t55xx_set_config() -> &'static str {
+    "lf t55xx set config"
+}
+
+/// `lf t55xx chk pwds` — check T55xx passwords.
+pub fn build_lf_t55xx_chk_pwds() -> &'static str {
+    "lf t55xx chk pwds"
+}
+
+/// `lf t55xx dangerraw` — raw T55xx danger mode.
+pub fn build_lf_t55xx_dangerraw() -> &'static str {
+    "lf t55xx dangerraw"
+}
+
+/// `lf t55xx wakeup` — wake up T55xx tag.
+pub fn build_lf_t55xx_wakeup() -> &'static str {
+    "lf t55xx wakeup"
+}
+
+// ---------------------------------------------------------------------------
+// HF MFU v4.23346 new commands (ndefwrite/ndefformat/chk)
+// ---------------------------------------------------------------------------
+
+/// `hf mfu chk` — check MIFARE Ultralight keys (v4.23346).
+pub fn build_mfu_chk() -> &'static str {
+    "hf mfu chk"
+}
+
+/// `hf mfu ndefwrite` — write NDEF records to card.
+pub fn build_mfu_ndefwrite(ndef_data: &str) -> String {
+    format!("hf mfu ndefwrite -d {}", ndef_data)
+}
+
+/// `hf mfu ndefformat` — format card as NFC tag.
+pub fn build_mfuf_ndefformat() -> &'static str {
+    "hf mfu ndefformat"
+}
+
+// ---------------------------------------------------------------------------
+// HF MF chk (v4.23346: cchk + aeschk merged into chk)
+// ---------------------------------------------------------------------------
+
+/// `hf mf chk` — check MIFARE Classic keys (v4.23346: replaces cchk + aeschk).
+pub fn build_hf_mf_chk() -> &'static str {
+    "hf mf chk"
+}
+
+// ---------------------------------------------------------------------------
+// HF 14b v4.23346 new commands (ctrdbl/rdbl/view --selftest)
+// ---------------------------------------------------------------------------
+
+/// `hf 14b rdbl` — read SRI512/SRIX4 block.
+pub fn build_hf_14b_rdbl(block: u16) -> String {
+    format!("hf 14b rdbl -b {}", block)
+}
+
+/// `hf 14b ctrdbl` — read ASK CTS/C-ticket block.
+pub fn build_hf_14b_ctrdbl(block: u16) -> String {
+    format!("hf 14b ctrdbl -b {}", block)
+}
+
+/// `hf 14b view --selftest` — self-test mode.
+pub fn build_hf_14b_view_selftest() -> &'static str {
+    "hf 14b view --selftest"
+}
+
+// ---------------------------------------------------------------------------
+// HF Calypso v4.23346 new commands (info/dump/list)
+// ---------------------------------------------------------------------------
+
+/// `hf calypso info` — Calypso tag info.
+pub fn build_hf_calypso_info() -> &'static str {
+    "hf calypso info"
+}
+
+/// `hf calypso dump` — dump Calypso tag.
+pub fn build_hf_calypso_dump() -> &'static str {
+    "hf calypso dump"
+}
+
+/// `hf calypso list` — list Calypso applications.
+pub fn build_hf_calypso_list() -> &'static str {
+    "hf calypso list"
+}
+
+// ---------------------------------------------------------------------------
+// HF Felica v4.23346 new command (sim)
+// ---------------------------------------------------------------------------
+
+/// `hf felica sim` — emulate FeliCa from dump file.
+pub fn build_hf_felica_sim(dump_path: &str) -> String {
+    format!("hf felica sim -f {}", dump_path)
+}
+
+// ---------------------------------------------------------------------------
+// HF iCLASS v4.23346 new command (legbrute)
+// ---------------------------------------------------------------------------
+
+/// `hf iclass legbrute` — LEGIC brute-force key recovery (NEON/AVX2/AVX-512).
+pub fn build_hf_iclass_legbrute() -> &'static str {
+    "hf iclass legbrute"
+}
+
+// ---------------------------------------------------------------------------
+// HF Thinfilm v4.23346 new command (sniff)
+// ---------------------------------------------------------------------------
+
+/// `hf thinfilm sniff` — sniff thin-film tags.
+pub fn build_hf_thinfilm_sniff() -> &'static str {
+    "hf thinfilm sniff"
+}
+
+// ---------------------------------------------------------------------------
+// MAD v4.23346 new commands (read/write/verify/decode/encode)
+// ---------------------------------------------------------------------------
+
+/// `mad read` — read MAD data.
+pub fn build_mad_read() -> &'static str {
+    "mad read"
+}
+
+/// `mad write` — write MAD data.
+pub fn build_mad_write(data: &str) -> String {
+    format!("mad write -d {}", data)
+}
+
+/// `mad verify` — verify MAD data.
+pub fn build_mad_verify() -> &'static str {
+    "mad verify"
+}
+
+/// `mad decode` — decode MAD data.
+pub fn build_mad_decode() -> &'static str {
+    "mad decode"
+}
+
+/// `mad encode` — encode MAD data.
+pub fn build_mad_encode(data: &str) -> String {
+    format!("mad encode -d {}", data)
+}
+
+// ---------------------------------------------------------------------------
+// NFC v4.23346 new command (encode)
+// ---------------------------------------------------------------------------
+
+/// `nfc encode` — encode NFC data.
+pub fn build_nfc_encode(data: &str) -> String {
+    format!("nfc encode -d {}", data)
+}
+
+// ---------------------------------------------------------------------------
+// LF Trovan v4.23346 new command
+// ---------------------------------------------------------------------------
+
+/// `lf trovan` — Trovan tag operations.
+pub fn build_lf_trovan() -> &'static str {
+    "lf trovan"
 }
 
 // ---------------------------------------------------------------------------
@@ -717,9 +995,23 @@ pub fn build_mf_cgetblk(blk: u16) -> String {
 }
 
 /// Read single block with specified key. Returns hex data if key is valid.
-/// `blk`: block number, `key`: 12 hex chars (e.g., "FFFFFFFFFFFF").
+/// v4.23346 syntax: `hf mf rdbl --blk <n> -k <key>`.
+/// `blk`: block number, `key`: 12 hex chars (e.g. "FFFFFFFFFFFF").
 pub fn build_mf_rdbl(blk: u16, key: &str) -> String {
     format!("hf mf rdbl --blk {} -k {}", blk, key)
+}
+
+/// Read a full sector with a key. v4.23346 syntax: `hf mf rdsc -s <n> -k <key>`.
+/// `sector`: sector number, `key`: 12 hex chars.
+pub fn build_mf_rdsc(sector: u16, key: &str) -> String {
+    format!("hf mf rdsc -s {} -k {}", sector, key)
+}
+
+/// Write a single block with a key. v4.23346 syntax:
+/// `hf mf wrbl --blk <n> -k <key> -d <data>`.
+/// `blk`: block number, `key`: 12 hex chars, `data`: 32 hex chars (16 bytes).
+pub fn build_mf_wrbl(blk: u16, key: &str, data: &str) -> String {
+    format!("hf mf wrbl --blk {} -k {} -d {}", blk, key, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +1027,84 @@ pub fn build_mf_cview() -> &'static str {
 /// Auto-discovers `hf-mf-<UID>-key.bin` in working directory.
 pub fn build_mf_dump() -> &'static str {
     "hf mf dump"
+}
+
+// ---------------------------------------------------------------------------
+// MIFARE Classic: break / emulator commands
+// ---------------------------------------------------------------------------
+/// MIFARE Classic auto key recovery. `hf mf autopwn` (v4.23346).
+/// Recovers keys for all sectors and writes `hf-mf-<UID>-key.bin` +
+/// `hf-mf-<UID>-dump.bin` to the current working directory.
+pub fn build_mf_autopwn() -> &'static str {
+    "hf mf autopwn"
+}
+
+/// Nested attack. v4.23346 syntax: `hf mf nested --1k --blk 0 -a -k FFFFFFFFFFFF`.
+/// `cardtype`: "mini", "1k", "2k", or "4k". `blk`: block/sector number.
+/// `keytype`: 'a' or 'b'. `key`: 12 hex chars.
+pub fn build_mf_nested(cardtype: &str, blk: u16, keytype: &str, key: &str) -> String {
+    format!("hf mf nested --{} --blk {} -{} -k {}", cardtype, blk, keytype, key)
+}
+
+/// Emulator: save emulator memory to a dump file.
+/// v4.23346 syntax: `hf mf esave --4k -f <filename>` or just `hf mf esave`.
+/// `filename`: output path (e.g. `hf-mf-01020304-dump.eml`). `size`: "mini", "1k", "2k", "4k".
+pub fn build_mf_esave(filename: Option<&str>, size: Option<&str>) -> String {
+    let mut parts = vec!["hf mf esave".to_string()];
+    if let Some(s) = size {
+        parts.push(format!("--{}", s));
+    }
+    if let Some(f) = filename {
+        parts.push(format!("-f {}", f));
+    }
+    parts.join(" ")
+}
+
+/// Emulator: simulate the loaded card (put PM3 in emu mode).
+/// v4.23346 syntax: `hf mf sim --1k` (default), `--2k`, `--4k`, `--mini`.
+pub fn build_mf_sim(size: Option<&str>, uid: Option<&str>) -> String {
+    let mut parts = vec!["hf mf sim".to_string()];
+    if let Some(s) = size {
+        parts.push(format!("--{}", s));
+    }
+    if let Some(u) = uid {
+        parts.push(format!("-u {}", u));
+    }
+    parts.join(" ")
+}
+
+/// Emulator: clear emulator memory. `hf mf eclr` (no args).
+pub fn build_mf_eclr() -> &'static str {
+    "hf mf eclr"
+}
+
+/// Emulator: load a dump file into emulator memory.
+/// v4.23346 syntax: `hf mf eload -f <filename>` or `hf mf eload --4k -f <filename>`.
+pub fn build_mf_eload(filename: &str, size: Option<&str>) -> String {
+    let mut parts = vec!["hf mf eload".to_string()];
+    if let Some(s) = size {
+        parts.push(format!("--{}", s));
+    }
+    parts.push(format!("-f {}", filename));
+    parts.join(" ")
+}
+
+/// Emulator: get a single block from emulator memory.
+/// v4.23346 syntax: `hf mf ejectblk --blk <n>`.
+pub fn build_mf_egetblk(blk: u16) -> String {
+    format!("hf mf ejectblk --blk {}", blk)
+}
+
+/// Emulator: get a sector from emulator memory.
+/// v4.23346 syntax: `hf mf ejectsc -s <n>`.
+pub fn build_mf_egetsc(sector: u16) -> String {
+    format!("hf mf ejectsc -s {}", sector)
+}
+
+/// Emulator: set a single block in emulator memory.
+/// v4.23346 syntax: `hf mf esetblk --blk <n> -d <data>`.
+pub fn build_mf_esetblk(blk: u16, data: &str) -> String {
+    format!("hf mf esetblk --blk {} -d {}", blk, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -952,5 +1322,209 @@ mod tests {
     #[test]
     fn mf_dump_cmd() {
         assert_eq!(build_mf_dump(), "hf mf dump");
+    }
+
+    // -- v4.23346 new commands --
+
+    #[test]
+    fn mfu_chk_cmd() {
+        assert_eq!(build_mfu_chk(), "hf mfu chk");
+    }
+
+    #[test]
+    fn mfu_ndefwrite_cmd() {
+        assert_eq!(
+            build_mfu_ndefwrite("01020304"),
+            "hf mfu ndefwrite -d 01020304"
+        );
+    }
+
+    #[test]
+    fn mfu_ndefformat_cmd() {
+        assert_eq!(build_mfuf_ndefformat(), "hf mfu ndefformat");
+    }
+
+    #[test]
+    fn hf_mf_chk_cmd() {
+        assert_eq!(build_hf_mf_chk(), "hf mf chk");
+    }
+
+    #[test]
+    fn hf_14b_rdbl_cmd() {
+        assert_eq!(build_hf_14b_rdbl(6), "hf 14b rdbl -b 6");
+    }
+
+    #[test]
+    fn hf_14b_ctrdbl_cmd() {
+        assert_eq!(build_hf_14b_ctrdbl(15), "hf 14b ctrdbl -b 15");
+    }
+
+    #[test]
+    fn hf_14b_view_selftest_cmd() {
+        assert_eq!(build_hf_14b_view_selftest(), "hf 14b view --selftest");
+    }
+
+    #[test]
+    fn hf_calypso_info_cmd() {
+        assert_eq!(build_hf_calypso_info(), "hf calypso info");
+    }
+
+    #[test]
+    fn hf_calypso_dump_cmd() {
+        assert_eq!(build_hf_calypso_dump(), "hf calypso dump");
+    }
+
+    #[test]
+    fn hf_calypso_list_cmd() {
+        assert_eq!(build_hf_calypso_list(), "hf calypso list");
+    }
+
+    #[test]
+    fn hf_felica_sim_cmd() {
+        assert_eq!(
+            build_hf_felica_sim("felica-dump.bin"),
+            "hf felica sim -f felica-dump.bin"
+        );
+    }
+
+    #[test]
+    fn hf_iclass_legbrute_cmd() {
+        assert_eq!(build_hf_iclass_legbrute(), "hf iclass legbrute");
+    }
+
+    #[test]
+    fn hf_thinfilm_sniff_cmd() {
+        assert_eq!(build_hf_thinfilm_sniff(), "hf thinfilm sniff");
+    }
+
+    #[test]
+    fn mad_read_cmd() {
+        assert_eq!(build_mad_read(), "mad read");
+    }
+
+    #[test]
+    fn mad_write_cmd() {
+        assert_eq!(build_mad_write("DEADBEEF"), "mad write -d DEADBEEF");
+    }
+
+    #[test]
+    fn mad_verify_cmd() {
+        assert_eq!(build_mad_verify(), "mad verify");
+    }
+
+    #[test]
+    fn mad_decode_cmd() {
+        assert_eq!(build_mad_decode(), "mad decode");
+    }
+
+    #[test]
+    fn mad_encode_cmd() {
+        assert_eq!(build_mad_encode("DEADBEEF"), "mad encode -d DEADBEEF");
+    }
+
+    #[test]
+    fn nfc_encode_cmd() {
+        assert_eq!(build_nfc_encode("01020304"), "nfc encode -d 01020304");
+    }
+
+    #[test]
+    fn lf_trovan_cmd() {
+        assert_eq!(build_lf_trovan(), "lf trovan");
+    }
+
+    #[test]
+    fn hf_mf_view_cmd() {
+        assert_eq!(
+            build_hf_mf_view("hf-mf-01020304-dump.bin"),
+            "hf mf view -f hf-mf-01020304-dump.bin"
+        );
+    }
+
+    #[test]
+    fn hf_mf_view_selftest_cmd() {
+        assert_eq!(build_hf_mf_view_selftest(), "hf mf view --selftest");
+    }
+
+    #[test]
+    fn hf_14b_view_cmd() {
+        assert_eq!(
+            build_hf_14b_view("hf-14b-D0021F673CB26556-dump.json"),
+            "hf 14b view -f hf-14b-D0021F673CB26556-dump.json"
+        );
+    }
+
+    #[test]
+    fn smart_pps_cmd() {
+        assert_eq!(build_smart_pps(), "smart pps");
+    }
+
+    #[test]
+    fn smart_pps_t0_cmd() {
+        assert_eq!(build_smart_pps_t0(), "smart pps --t0");
+    }
+
+    #[test]
+    fn smart_pps_t1_cmd() {
+        assert_eq!(build_smart_pps_t1(), "smart pps --t1");
+    }
+
+    #[test]
+    fn smart_pps_ta1_cmd() {
+        assert_eq!(build_smart_pps_ta1("93"), "smart pps --ta1 93");
+    }
+
+    #[test]
+    fn hf_emrtd_info_cmd() {
+        assert_eq!(build_hf_emrtd_info(), "hf emrtd info");
+    }
+
+    #[test]
+    fn hf_emrtd_dump_cmd() {
+        assert_eq!(build_hf_emrtd_dump(), "hf emrtd dump");
+    }
+
+    #[test]
+    fn hf_emrtd_list_cmd() {
+        assert_eq!(build_hf_emrtd_list(), "hf emrtd list");
+    }
+
+    #[test]
+    fn hf_emrtd_test_cmd() {
+        assert_eq!(build_hf_emrtd_test(), "hf emrtd test");
+    }
+
+    #[test]
+    fn trace_clear_cmd() {
+        assert_eq!(build_trace_clear(), "trace clear");
+    }
+
+    #[test]
+    fn hf_14a_antifuzz_cmd() {
+        assert_eq!(build_hf_14a_antifuzz(), "hf 14a antifuzz");
+    }
+
+    #[test]
+    fn hf_14a_antifuzz_coll_cmd() {
+        assert_eq!(build_hf_14a_antifuzz_coll(), "hf 14a antifuzz --coll");
+    }
+
+    #[test]
+    fn lf_t55xx_set_config_cmd() {
+        assert_eq!(build_lf_t55xx_set_config(), "lf t55xx set config");
+    }
+
+    #[test]
+    fn lf_t55xx_chk_pwds_cmd() {
+        assert_eq!(build_lf_t55xx_chk_pwds(), "lf t55xx chk pwds");
+    }
+
+    #[test]
+    fn lf_t55xx_dangerraw_cmd() {
+        assert_eq!(build_lf_t55xx_dangerraw(), "lf t55xx dangerraw");
+    }
+
+    #[test]
+    fn lf_t55xx_wakeup_cmd() {
+        assert_eq!(build_lf_t55xx_wakeup(), "lf t55xx wakeup");
     }
 }

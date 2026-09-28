@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::error::AppError;
 use crate::pm3::connection;
+use crate::state::WizardMachine;
 
 // Use the Iso15Info defined in lib.rs
 use crate::Iso15Info;
@@ -11,26 +12,14 @@ use crate::Iso15Info;
 #[tauri::command]
 pub async fn iso15_info(
     app: AppHandle,
-    machine: State<'_, Mutex<crate::state::WizardMachine>>,
+    machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<Iso15Info, AppError> {
-    // Grab the currently‑connected port from the wizard state
-    let port = {
-        let m = machine.lock().map_err(|e| {
-            AppError::CommandFailed(format!("State lock poisoned: {}", e))
-        })?;
-        let port = match &m.current {
-            crate::state::WizardState::DeviceConnected { port, .. } => port.clone(),
-            _ => {
-                return Err(AppError::InvalidTransition(
-                    "No device connected".to_string(),
-                ));
-            }
-        };
-        port
-    };
+    // Use the shared get_port helper so the Advanced tab works after a scan
+    // without forcing the user to click Back first.
+    let port = get_port(&machine)?;
 
     // Execute the PM3 command.
-    let raw = connection::run_command(&app, &port, "hf 15 info").await?;
+    let raw = connection::run_command_quick(&app, &port, "hf 15 info").await?;
 
     // Parse the output – adjust to match actual PM3 output.
     let info = parse_iso15_output(&raw)?;
@@ -61,4 +50,20 @@ fn parse_iso15_output(output: &str) -> Result<Iso15Info, AppError> {
         dsfid: dsfid.unwrap_or_default(),
         // add more fields as you discover them (AFI, etc.)
     })
+}
+
+fn get_port(machine: &State<'_, Mutex<WizardMachine>>) -> Result<String, AppError> {
+    let m = machine.lock().map_err(|e| {
+        AppError::CommandFailed(format!("State lock poisoned: {}", e))
+    })?;
+
+    if let crate::state::WizardState::DeviceConnected { port, .. } = &m.current {
+        return Ok(port.clone());
+    }
+
+    if let Some(port) = &m.port {
+        return Ok(port.clone());
+    }
+
+    Err(AppError::InvalidTransition("No device connected".to_string()))
 }

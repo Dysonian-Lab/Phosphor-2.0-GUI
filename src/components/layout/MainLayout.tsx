@@ -38,7 +38,7 @@ export function MainLayout() {
     }
   })();
 
-  const renderContent = () => {
+    const renderContent = () => {
     switch (activeTab) {
       case 'scan':
       case 'write':
@@ -68,11 +68,7 @@ export function MainLayout() {
           </div>
         );
       case 'advanced':
-        return (
-          <div style={{ padding: '24px', position: 'relative', zIndex: 5 }}>
-            <AdvancedContainer />
-          </div>
-        );
+        return <AdvancedContainer />;
     }
   };
 

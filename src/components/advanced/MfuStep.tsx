@@ -1,8 +1,8 @@
 import { useAdvanced } from '../../hooks/useAdvanced';
 import { useState } from 'react';
 
-export function IclassSeStep({ advanced }: { advanced: ReturnType<typeof useAdvanced> }) {
-  const [info, setInfo] = useState<null | { uid: string; atqa: string }>(null);
+export function MfuStep({ advanced }: { advanced: ReturnType<typeof useAdvanced> }) {
+  const [data, setData] = useState<string>('');
   const [output, setOutput] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,42 +30,29 @@ export function IclassSeStep({ advanced }: { advanced: ReturnType<typeof useAdva
     }
   };
 
-  const fetch = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await advanced.iclassSeInfo();
-      setInfo({ uid: data.uid, atqa: data.atqa });
-    } catch (e: any) {
-      setError(getErrorMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div style={{ maxWidth: '600px' }}>
-      <h3>iCLASS SE/SEOS</h3>
-      <div style={{ marginBottom: '12px' }}>
-        <button onClick={fetch} disabled={loading}>
-          {loading ? 'Querying…' : 'Read iCLASS SE/SEOS Tag'}
-        </button>
+      <h3>MFU (Mifare Ultralight)</h3>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '12px' }}>
+        MFU v4.23346: chk / ndefwrite / ndefformat
+      </p>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+        <button onClick={() => run(advanced.mfuChk, 'chk')} disabled={loading}>Chk</button>
+        <button onClick={() => run(advanced.mfuNdefformat, 'ndefformat')} disabled={loading}>NDEF format</button>
       </div>
 
-      {/* v4.23346: legbrute key recovery */}
-      <div style={{ marginBottom: '12px' }}>
-        <button onClick={() => run(advanced.iclassLegbrute, 'legbrute')} disabled={loading}>
-          Legbrute (key recovery)
-        </button>
+      <div style={{ padding: '10px', background: 'var(--bg-tertiary)', borderRadius: '6px' }}>
+        <label htmlFor='mfu-data' style={{ display: 'block', marginBottom: '4px', fontSize: '13px' }}>
+          NDEF data (for ndefwrite):
+        </label>
+        <input id='mfu-data' type='text' value={data} onChange={(e) => setData(e.target.value)}
+          placeholder='e.g. Hello' style={{ width: '100%', padding: '4px' }} />
+        <button onClick={() => run(() => advanced.mfuNdefwrite(data), 'ndefwrite')} disabled={loading || !data}
+          style={{ marginTop: '6px' }}>NDEF write</button>
       </div>
 
       {error && (<div style={{ color: 'var(--red-bright)', marginTop: '12px' }}>Error: {error}</div>)}
-      {info && (
-        <div style={{ marginTop: '16px', fontFamily: 'var(--font-mono)' }}>
-          <div>UID: {info.uid}</div>
-          <div>ATQA: {info.atqa}</div>
-        </div>
-      )}
       {output && (
         <div style={{ marginTop: '16px', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '6px' }}>
           {output}

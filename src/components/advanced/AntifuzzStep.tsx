@@ -1,8 +1,7 @@
 import { useAdvanced } from '../../hooks/useAdvanced';
 import { useState } from 'react';
 
-export function IclassSeStep({ advanced }: { advanced: ReturnType<typeof useAdvanced> }) {
-  const [info, setInfo] = useState<null | { uid: string; atqa: string }>(null);
+export function AntifuzzStep({ advanced }: { advanced: ReturnType<typeof useAdvanced> }) {
   const [output, setOutput] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,42 +29,17 @@ export function IclassSeStep({ advanced }: { advanced: ReturnType<typeof useAdva
     }
   };
 
-  const fetch = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await advanced.iclassSeInfo();
-      setInfo({ uid: data.uid, atqa: data.atqa });
-    } catch (e: any) {
-      setError(getErrorMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div style={{ maxWidth: '600px' }}>
-      <h3>iCLASS SE/SEOS</h3>
-      <div style={{ marginBottom: '12px' }}>
-        <button onClick={fetch} disabled={loading}>
-          {loading ? 'Querying…' : 'Read iCLASS SE/SEOS Tag'}
-        </button>
+      <h3>ISO 14443‑A Antifuzz</h3>
+      <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginBottom: '12px' }}>
+        hf 14a antifuzz v4.23346: fuzz the anticollision phase to test reader robustness
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' }}>
+        <button onClick={() => run(advanced.hf14aAntifuzz, 'antifuzz')} disabled={loading}>Antifuzz</button>
+        <button onClick={() => run(advanced.hf14aAntifuzzColl, 'antifuzz --coll')} disabled={loading}>Collision storm</button>
       </div>
-
-      {/* v4.23346: legbrute key recovery */}
-      <div style={{ marginBottom: '12px' }}>
-        <button onClick={() => run(advanced.iclassLegbrute, 'legbrute')} disabled={loading}>
-          Legbrute (key recovery)
-        </button>
-      </div>
-
       {error && (<div style={{ color: 'var(--red-bright)', marginTop: '12px' }}>Error: {error}</div>)}
-      {info && (
-        <div style={{ marginTop: '16px', fontFamily: 'var(--font-mono)' }}>
-          <div>UID: {info.uid}</div>
-          <div>ATQA: {info.atqa}</div>
-        </div>
-      )}
       {output && (
         <div style={{ marginTop: '16px', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', background: 'var(--bg-tertiary)', padding: '12px', borderRadius: '6px' }}>
           {output}

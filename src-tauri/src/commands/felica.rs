@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::error::AppError;
 use crate::pm3::connection;
+use crate::state::WizardMachine;
 
 // Use the FelicaInfo defined in lib.rs
 use crate::FelicaInfo;
@@ -11,26 +12,14 @@ use crate::FelicaInfo;
 #[tauri::command]
 pub async fn felica_info(
     app: AppHandle,
-    machine: State<'_, Mutex<crate::state::WizardMachine>>,
+    machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<FelicaInfo, AppError> {
-    // Grab the currently‑connected port from the wizard state
-    let port = {
-        let m = machine.lock().map_err(|e| {
-            AppError::CommandFailed(format!("State lock poisoned: {}", e))
-        })?;
-        let port = match &m.current {
-            crate::state::WizardState::DeviceConnected { port, .. } => port.clone(),
-            _ => {
-                return Err(AppError::InvalidTransition(
-                    "No device connected".to_string(),
-                ));
-            }
-        };
-        port
-    };
+    // Use the shared get_port helper so the Advanced tab works after a scan
+    // without forcing the user to click Back first.
+    let port = get_port(&machine)?;
 
     // Execute the PM3 command.
-    let raw = connection::run_command(&app, &port, "hf felica info").await?;
+    let raw = connection::run_command_quick(&app, &port, "hf felica info").await?;
 
     // Parse the output – adjust to match actual PM3 output.
     let info = parse_felica_output(&raw)?;
@@ -61,4 +50,20 @@ fn parse_felica_output(output: &str) -> Result<FelicaInfo, AppError> {
         pmm: pmm.unwrap_or_default(),
         // add more fields as you discover them
     })
+}
+
+fn get_port(machine: &State<'_, Mutex<WizardMachine>>) -> Result<String, AppError> {
+    let m = machine.lock().map_err(|e| {
+        AppError::CommandFailed(format!("State lock poisoned: {}", e))
+    })?;
+
+    if let crate::state::WizardState::DeviceConnected { port, .. } = &m.current {
+        return Ok(port.clone());
+    }
+
+    if let Some(port) = &m.port {
+        return Ok(port.clone());
+    }
+
+    Err(AppError::InvalidTransition("No device connected".to_string()))
 }

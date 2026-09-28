@@ -219,14 +219,14 @@ export function WizardContainer() {
         );
       case 'Error':
         return (
-          <ErrorStep
-            message={wizard.context.errorUserMessage}
-            recoverable={wizard.context.errorRecoverable}
-            recoveryAction={wizard.context.errorRecoveryAction}
-            errorSource={wizard.context.errorSource}
-            onRetry={wizard.reset}
-            onReset={wizard.reset}
-          />
+           <ErrorStep
+             message={wizard.context.errorUserMessage}
+             recoverable={wizard.context.errorRecoverable}
+             recoveryAction={wizard.context.errorRecoveryAction}
+             errorSource={wizard.context.errorSource}
+             onRetry={wizard.softReset}
+             onReset={wizard.reset}
+           />
         );
       default:
         return (

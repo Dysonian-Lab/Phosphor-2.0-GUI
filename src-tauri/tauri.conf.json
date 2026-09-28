@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Phosphor 2.0 GUI",
-  "version": "2.0.0",
+  "productName": "Phosphor 2.2 GUI",
+  "version": "2.2.0",
   "identifier": "com.phosphor.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Phosphor 2.0 GUI",
+        "title": "Phosphor 2.2 GUI",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -31,7 +31,20 @@
     "externalBin": ["binaries/proxmark3"],
     "resources": {
       "pm3-libs/*": "./",
+        "pm3-libs/dictionaries/*": "./dictionaries/",
+        "pm3-libs/hardnested_tables/*": "./hardnested_tables/",
+        "pm3-libs/iconengines/*": "./iconengines/",
+        "pm3-libs/imageformats/*": "./imageformats/",
+        "pm3-libs/networkinformation/*": "./networkinformation/",
         "pm3-libs/platforms/*": "./platforms/",
+        "pm3-libs/share/proxmark3/luascripts/*": "./share/proxmark3/luascripts/",
+        "pm3-libs/share/proxmark3/cmdscripts/*": "./share/proxmark3/cmdscripts/",
+        "pm3-libs/share/proxmark3/pyscripts/*": "./share/proxmark3/pyscripts/",
+        "pm3-libs/share/proxmark3/lualibs/*": "./share/proxmark3/lualibs/",
+        "pm3-libs/share/proxmark3/dictionaries/*": "./share/proxmark3/dictionaries/",
+        "pm3-libs/share/proxmark3/resources/*": "./share/proxmark3/resources/",
+        "pm3-libs/styles/*": "./styles/",
+        "pm3-libs/tls/*": "./tls/",
         "firmware/rdv4/*": "./firmware/rdv4/",
         "firmware/rdv4-bt/*": "./firmware/rdv4-bt/",
         "firmware/generic/*": "./firmware/generic/"
@@ -47,7 +60,7 @@
     "shortDescription": "Proxmark3 GUI for one-click card cloning",
     "windows": {
       "nsis": {
-        "installMode": "both",
+        "installMode": "currentUser",
         "displayLanguageSelector": true,
         "languages": ["English", "Russian"],
         "installerIcon": "icons/icon.ico"

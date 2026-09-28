@@ -9,6 +9,7 @@ export function ScriptStep({ advanced }: { advanced: ReturnType<typeof useAdvanc
   const [scripts, setScripts] = useState<string[]>([]);
   const [selectedScript, setSelectedScript] = useState<string>(''); // empty means new script
   const [scriptContent, setScriptContent] = useState<string>('');
+  const [args, setArgs] = useState<string>('');
   const [output, setOutput] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +106,7 @@ export function ScriptStep({ advanced }: { advanced: ReturnType<typeof useAdvanc
     setError(null);
     setOutput(null);
     try {
-      const result = await advanced.runScript(scriptContent);
+      const result = await advanced.runScript(scriptContent, args);
       setOutput(result.output);
     } catch (e: any) {
       setError(getErrorMessage(e));
@@ -114,16 +115,28 @@ export function ScriptStep({ advanced }: { advanced: ReturnType<typeof useAdvanc
     }
   };
 
-  const handleScriptChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+const handleScriptChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
     if (value === '--new-script--') {
       setSelectedScript('');
       setScriptContent('');
     } else {
+      // value is the internal name (bundled/... or user/...); load by that
       setSelectedScript(value);
-      // Load the selected script
       loadScript(value);
     }
+  };
+
+  // Strip the bundled/ or user/ prefix for display in the dropdown.
+  const displayScript = (name: string): string => {
+    if (name.startsWith('bundled/')) {
+      const parts = name.split('/');
+      return parts.slice(1).join('/'); // e.g. "luascripts/hf_mf_autopwn.lua"
+    }
+    if (name.startsWith('user/')) {
+      return name.slice(5); // e.g. "my_script.lua"
+    }
+    return name;
   };
 
   return (
@@ -141,7 +154,7 @@ export function ScriptStep({ advanced }: { advanced: ReturnType<typeof useAdvanc
           <option value='--new-script--'>-- New Script --</option>
           {scripts.map((script) => (
             <option key={script} value={script}>
-              {script}
+              {displayScript(script)}
             </option>
           ))}
         </select>
@@ -176,6 +189,16 @@ export function ScriptStep({ advanced }: { advanced: ReturnType<typeof useAdvanc
       </div>
 
       <br />
+      <div style={{ marginBottom: '8px' }}>
+        <label htmlFor='script-args' style={{ marginRight: '8px' }}>Arguments:</label>
+        <input
+          id='script-args'
+          value={args}
+          onChange={(e) => setArgs(e.target.value)}
+          placeholder='e.g. -a 7F0F0869'
+          style={{ width: '260px' }}
+        />
+      </div>
       <button onClick={runScript} disabled={loading}>
         {loading ? 'Running...' : 'Run Script'}
       </button>

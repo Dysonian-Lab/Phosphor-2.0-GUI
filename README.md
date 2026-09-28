@@ -14,8 +14,10 @@ Phosphor wraps the Proxmark3 client into a visual wizard. You plug in your Proxm
 
 - **Iceman fork v4.23346** — upgraded PM3 firmware base to the latest upstream
 - **CAPABILITIES_VERSION 11** — client and firmware must be flashed as a matched pair
-- **New Advanced tab commands** — Calypso, Felica sim, Trovan, Thinfilm sniff, MAD read/write/verify/decode/encode, NFC encode, MFU NDEF write/format, MFDES eload/esave/eview/dump/view/etest/sim/chk/detect, iCLASS legbrute, 14B rdbl/ctrdbl/view --selftest
+- **20 Advanced tab panels** — up from 14. New tabs: MF View (RKF/VIGIK/HID PACS), eMRTD (PACE-CAM passport), Smart Card (ISO 7816-3 PPS), Antifuzz, T55xx, Trace
+- **New commands**: `hf mf view`, `hf 14b view -f` (MyKey/COGES), `smart pps`, `hf emrtd info/dump/list/test`, `trace clear`, `hf 14a antifuzz --coll`, `lf t55xx set config/chk pwds/dangerraw/wakeup`, `hf thinfilm sim`, `mad read/write/verify/decode/encode`, `nfc encode`, `hf mfu ndefwrite/ndefformat/chk`, `hf mfdes eload/esave/eview/dump/view/etest/sim/chk/detect`, `hf iclass legbrute`, `hf 14b rdbl/ctrdbl/view --selftest`, `hf calypso info/dump/list`, `hf felica sim`, `lf trovan`
 - **Command alignment** — `hf mf cchk` + `hf mf aeschk` merged into `hf mf chk`; `hf mfdes chk` now no-arg; `hf 14b valid` removed
+- **19 unreleased master features evaluated** — 12 fully covered, 3 partial, 4 N/A (BWM BLE/WiFi/power, hw powersave, Flipper Zero link, ePassport)
 
 ## Supported cards
 
