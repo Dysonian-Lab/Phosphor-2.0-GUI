@@ -103,9 +103,8 @@ export const useAdvanced = () => ({
   calypsoDump: async () => invoke<string>('calypso_dump'),
   calypsoList: async () => invoke<string>('calypso_list'),
 
-  // Thinfilm v4.23346: sniff / sim
+  // Thinfilm v4.23346: sniff (sim needs a dump file — not exposed)
   thinfilmSniff: async () => invoke<string>('thinfilm_sniff'),
-  thinfilmSim: async (data: string) => invoke<string>('thinfilm_sim', { data: data }),
 
   // MAD v4.23346: read/write/verify/decode/encode
   madRead: async () => invoke<string>('mad_read'),
