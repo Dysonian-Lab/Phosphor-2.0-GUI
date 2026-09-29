@@ -268,7 +268,7 @@ pub async fn mf_eload(
     connection::run_command(&app, &port, &cmd).await
 }
 
-/// Emulator: get a single block. `hf mf ejectblk --blk <n>`.
+    /// Emulator: get a single block. `hf mf egetblk -b <n>`.
 #[tauri::command]
 pub async fn mf_egetblk(
     app: AppHandle,
@@ -293,34 +293,34 @@ pub async fn mf_esetblk(
     connection::run_command(&app, &port, &cmd).await
 }
 
-/// Run `lf t55xx set config` — configure T55xx tag parameters.
+/// Run `lf t55xx config` — get/set T55xx tag parameters.
 #[tauri::command]
 pub async fn lf_t55xx_set_config(
     app: AppHandle,
     machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<String, AppError> {
     let port = get_port(&machine)?;
-    connection::run_command(&app, &port, "lf t55xx set config").await
+    connection::run_command(&app, &port, command_builder::build_lf_t55xx_set_config()).await
 }
 
-/// Run `lf t55xx chk pwd` — check T55xx passwords.
+/// Run `lf t55xx chk` — check T55xx passwords.
 #[tauri::command]
 pub async fn lf_t55xx_chk_pwds(
     app: AppHandle,
     machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<String, AppError> {
     let port = get_port(&machine)?;
-    connection::run_command(&app, &port, "lf t55xx chk pwd").await
+    connection::run_command(&app, &port, command_builder::build_lf_t55xx_chk_pwds()).await
 }
 
-/// Run `lf t55xx danger raw` — write raw data to T55xx.
+/// Run `lf t55xx dangerraw` — write raw data to T55xx.
 #[tauri::command]
 pub async fn lf_t55xx_dangerraw(
     app: AppHandle,
     machine: State<'_, Mutex<WizardMachine>>,
 ) -> Result<String, AppError> {
     let port = get_port(&machine)?;
-    connection::run_command(&app, &port, "lf t55xx danger raw").await
+    connection::run_command(&app, &port, command_builder::build_lf_t55xx_dangerraw()).await
 }
 
 /// Run `lf t55xx wakeup` — wake up T55xx tag.

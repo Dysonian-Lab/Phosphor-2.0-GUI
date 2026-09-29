@@ -64,9 +64,13 @@ export function ScanStep({
   // Card has been identified -- show results
   if (cardData && cardType) {
     const freqLabel = frequency === 'LF' ? '125 kHz (LF)' : frequency === 'HF' ? '13.56 MHz (HF)' : 'Unknown';
-    // Filter out fields already shown in the header (type, uid) to avoid duplication
+    // Filter out fields already shown in the header (type, uid) to avoid duplication.
+    // `t55xx_blk_<n>` keys are internal transport for the T55xx block-clone
+    // write path -- the user sees a single BLOCKS count instead.
     const decodedEntries = cardData.decoded
-      ? Object.entries(cardData.decoded).filter(([key]) => key !== 'type' && key !== 'uid')
+      ? Object.entries(cardData.decoded).filter(
+          ([key]) => key !== 'type' && key !== 'uid' && !key.startsWith('t55xx_blk_'),
+        )
       : [];
 
     const btnBase: React.CSSProperties = {

@@ -2,6 +2,29 @@
 
 ## v2.2.0 — PM3 v4.23346 Alignment (September 2026)
 
+### ⚠ Critical scan and write fixes (rebuilt 29 Sep 2026)
+This build replaces the earlier 28 Sep v2.2.0 upload. If you downloaded that one,
+**please re-download** — it could not complete a scan.
+
+- **Scanning was broken for every card.** `lf search` and `hf search` are full
+  sweeps that take ~10-11 seconds, but the app was timing them out at 8 seconds.
+  The interrupted Proxmark3 process was not terminated and kept holding the
+  serial port, so the next command failed with `invalid serial port`. The app
+  then reported this as "No card found" even though the card was on the reader.
+  The search timeout is now 30 seconds and the child process is killed on
+  timeout, so the port is always released.
+- **A dropped connection is now reported as a connection error**, not as
+  "No card found". You will get a clear "could not open the serial port" message
+  telling you to reconnect, instead of being told to place a card that is
+  already there.
+- **T55xx cards are writable again.** T55xx was incorrectly flagged as
+  non-cloneable, so a detected T55xx showed no WRITE button. Scanning a T55xx
+  now reads its configuration blocks and WRITE copies them onto a T5577 blank,
+  block by block, with verification after each write.
+- **PM3's own error text is now shown** when a command fails, instead of a
+  generic message.
+- 293 automated tests pass.
+
 ### Foundation: Iceman fork v4.23346 ("Frosty Lemon")
 - Upgraded the bundled Proxmark3 client to the Iceman fork v4.23346.
 - Rebuilt all 3 firmware images (rdv4, rdv4-bt, generic) from v4.23346 source.
@@ -51,7 +74,7 @@ All v4.23346 commands exposed as buttons:
 
 ### Verification
 - `cargo build` — SUCCESS
-- `cargo test --lib` — 272 passed, 0 failed
+- `cargo test --lib` — 293 passed, 0 failed
 - `npm run build` — SUCCESS (3.33s)
 - `npm run tauri build` — SUCCESS (NSIS installer + portable ZIP)
 - Device verified on v4.23346 (`hw version` reports `Iceman/master/v4.23346`)
@@ -99,5 +122,5 @@ portable/
 - Windows 10 x64 with Proxmark3 USB + bundled client.
 - Missing binary / console popup issues resolved.
 - Serial port detection confirmed with heuristic scoring.
-- All 272 unit tests pass.
+- All 293 unit tests pass.
 - 20 Advanced tab panels functional.

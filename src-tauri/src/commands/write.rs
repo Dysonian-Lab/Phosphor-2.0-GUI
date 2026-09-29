@@ -295,6 +295,20 @@ async fn write_t5577_flow(
                 );
             }
         }
+        None if card_type == &CardType::T55xx => {
+            // T55xx is cloned block-by-block from the source card's config
+            // blocks, which were captured during scan. There is no single-shot
+            // clone command for this chipset.
+            if let Err(e) = write_t55xx_blocks(app, port, decoded, machine).await {
+                return report_error(
+                    machine,
+                    &e,
+                    "Could not write the T55xx blocks. Do not remove the card — try again.",
+                    true,
+                    Some(RecoveryAction::Retry),
+                );
+            }
+        }
         None => {
             return report_error(
                 machine,
@@ -321,6 +335,46 @@ async fn write_t5577_flow(
         })?;
         m.current.clone()
     })
+}
+
+/// Write the source T55xx's config blocks onto the blank on the reader.
+///
+/// Each block is written and verified individually. Progress is reported per
+/// block so the UI shows real movement rather than sitting at one value, and the
+/// first block that fails stops the run -- continuing would leave the target in a
+/// half-configured state that is harder to recover than a clean failure.
+async fn write_t55xx_blocks(
+    app: &AppHandle,
+    port: &str,
+    decoded: &std::collections::HashMap<String, String>,
+    machine: &State<'_, Mutex<WizardMachine>>,
+) -> Result<(), String> {
+    let (commands, total) = command_builder::build_t55xx_block_clone(decoded)?;
+
+    log::debug!("T55xx block clone: {} block(s)", total);
+
+    for (i, cmd) in commands.iter().enumerate() {
+        // Scale the clone step across the last portion of the progress bar.
+        let progress = 0.7 + (0.3 * (i as f32 / total as f32));
+        update_progress(app, machine, progress, Some(i as u16), Some(total as u16))
+            .map_err(|e| e.to_string())?;
+
+        log::debug!("T55xx block {}/{}: {}", i + 1, total, cmd);
+
+        // A T55xx write can legitimately exit non-zero while still succeeding,
+        // so tolerate the exit code and judge from the output instead.
+        let out = connection::run_search_command(app, port, cmd)
+            .await
+            .map_err(|e| format!("block {} of {} failed: {}", i + 1, total, e))?;
+
+        output_parser::parse_t55xx_write_result(&out)
+            .map_err(|e| format!("block {} of {} failed: {}", i + 1, total, e))?;
+    }
+
+    update_progress(app, machine, 1.0, Some(total as u16), Some(total as u16))
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 /// EM4305 write flow with detect + wipe-verify safety checks:

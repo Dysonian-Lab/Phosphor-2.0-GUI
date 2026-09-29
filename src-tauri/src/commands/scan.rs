@@ -29,18 +29,27 @@ pub async fn scan_card(
     };
 
     // 1. Try LF search first (fast path for 125 kHz cards)
+    // `run_search_command` keeps the output even when PM3 exits non-zero, which
+    // matters here: `lf search` exits -10 on a T5577 *after* printing
+    // "[+] Chipset... T55xx". The strict path discarded that and reported a
+    // connection failure for a card that was detected.
     let lf_result =
-        connection::run_command(&app, &port, command_builder::build_lf_search()).await;
+        connection::run_search_command(&app, &port, command_builder::build_lf_search()).await;
 
     if let Ok(ref output) = lf_result {
-        if let Some((card_type, card_data)) = output_parser::parse_lf_search(output) {
+        if let Some((card_type, mut card_data)) = output_parser::parse_lf_search(output) {
+            // T55xx carries its clonable payload in config blocks that `lf search`
+            // does not print, so they have to be read explicitly.
+            if card_type == CardType::T55xx {
+                enrich_t55xx_data(&app, &port, &mut card_data).await;
+            }
             return finish_scan(&machine, card_type, card_data);
         }
     }
 
     // 2. LF found nothing → try HF search (13.56 MHz)
     let hf_result =
-        connection::run_command(&app, &port, command_builder::build_hf_search()).await;
+        connection::run_search_command(&app, &port, command_builder::build_hf_search()).await;
 
     match hf_result {
         Ok(output) => {
@@ -72,7 +81,12 @@ pub async fn scan_card(
                 })?;
             m.transition(WizardAction::ReportError {
                 message: e.to_string(),
-                user_message: "Scan failed. Check device connection.".to_string(),
+                // Only spawn/timeout failures land here now — the search commands
+                // return their output regardless of exit code, so a card that was
+                // detected but not classified no longer ends up on this path.
+                user_message: "Could not run the scan. Check the device connection and that
+                    the Proxmark3 is switched on."
+                    .to_string(),
                 recoverable: true,
                 recovery_action: Some(RecoveryAction::Retry),
             })?;
@@ -92,6 +106,60 @@ pub async fn scan_card(
                 Ok(m.current.clone())
             }
         }
+    }
+}
+
+/// Read a detected T55xx's functional config blocks (0-7) so the card can
+/// actually be cloned onto a blank.
+///
+/// `lf search` only reports the chipset. The clonable payload lives in the
+/// config blocks, and each needs its own `lf t55xx read -b <n>`, so this is
+/// 8 round trips. That is the cost of making the card writable, and it is only
+/// paid for T55xx -- no other scan path is slowed.
+///
+/// A blank T5577 has no data in these blocks; PM3 returns only a table header
+/// and exits -7. That is recorded explicitly so the write step can explain
+/// itself instead of failing with a confusing "no clone command".
+async fn enrich_t55xx_data(
+    app: &AppHandle,
+    port: &str,
+    card_data: &mut crate::cards::types::CardData,
+) {
+    use crate::pm3::command_builder::T55XX_BLOCK_KEY_PREFIX;
+
+    const BLOCKS: std::ops::Range<u8> = 0..8;
+    let mut captured = 0u32;
+
+    for block in BLOCKS {
+        let cmd = match command_builder::build_t55xx_read(block) {
+            Ok(c) => c,
+            Err(_) => break,
+        };
+
+        // `run_search_command` keeps output on a non-zero exit: a blank block
+        // exits -7 but still prints the table, and that is expected here.
+        let out = match connection::run_search_command(app, port, &cmd).await {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+
+        if let Some(hex) = output_parser::parse_t55xx_read_block(&out) {
+            card_data
+                .decoded
+                .insert(format!("{}{}", T55XX_BLOCK_KEY_PREFIX, block), hex);
+            captured += 1;
+        }
+    }
+
+    if captured == 0 {
+        card_data.decoded.insert(
+            "blocks".to_string(),
+            "none (blank or unprogrammed chip)".to_string(),
+        );
+    } else {
+        card_data
+            .decoded
+            .insert("blocks".to_string(), captured.to_string());
     }
 }
 

@@ -37,6 +37,10 @@ pub enum CardType {
     COTAG,
     EM4x50,
     Hitag,
+    /// Generic T55xx chipset (T5577/T5555) reported by `lf search` as
+    /// "[+] Chipset... T55xx". Not a cloneable type -- these are config chips,
+    /// handled by the T55xx Advanced tab rather than the clone wizard.
+    T55xx,
     // HF types
     MifareClassic1K,
     MifareClassic4K,
@@ -73,7 +77,8 @@ impl CardType {
             | CardType::IDTECK
             | CardType::COTAG
             | CardType::EM4x50
-            | CardType::Hitag => Frequency::LF,
+            | CardType::Hitag
+            | CardType::T55xx => Frequency::LF,
 
             CardType::MifareClassic1K
             | CardType::MifareClassic4K
@@ -113,6 +118,7 @@ impl CardType {
             CardType::COTAG => "COTAG",
             CardType::EM4x50 => "EM4x50",
             CardType::Hitag => "Hitag",
+            CardType::T55xx => "T55xx",
             CardType::MifareClassic1K => "MIFARE Classic 1K",
             CardType::MifareClassic4K => "MIFARE Classic 4K",
             CardType::MifareUltralight => "MIFARE Ultralight",
@@ -128,6 +134,11 @@ impl CardType {
             CardType::COTAG => false,
             CardType::EM4x50 => false,
             CardType::Hitag => false,
+            // A T55xx is a real, writable config chip. `lf search` reports the
+            // generic chipset, and the source-card workflow (read blocks 0-7
+            // from the source, write them to a T5577) is exactly how these are
+            // cloned. Marking it non-cloneable left the user with a detected
+            // card and no way to write it.
             _ => true,
         }
     }
@@ -154,16 +165,16 @@ impl CardType {
         matches!(
             self,
             CardType::EM4100
-                | CardType::HIDProx
-                | CardType::Indala
-                | CardType::IOProx
-                | CardType::AWID
-                | CardType::FDX_B
-                | CardType::Paradox
-                | CardType::Viking
-                | CardType::Pyramid
-                | CardType::Keri
-                | CardType::NexWatch
+            | CardType::HIDProx
+            | CardType::Indala
+            | CardType::IOProx
+            | CardType::AWID
+            | CardType::FDX_B
+            | CardType::Paradox
+            | CardType::Viking
+            | CardType::Pyramid
+            | CardType::Keri
+            | CardType::NexWatch
         )
     }
 
@@ -194,6 +205,7 @@ impl CardType {
             | CardType::IDTECK => BlankType::T5577,
             // Non-cloneable LF: return T5577 as placeholder (won't actually be used)
             CardType::COTAG | CardType::EM4x50 | CardType::Hitag => BlankType::T5577,
+            CardType::T55xx => BlankType::T5577,
             // HF types
             CardType::MifareClassic1K | CardType::MifareClassic4K => BlankType::MagicMifareGen1a,
             CardType::MifareUltralight => BlankType::MagicUltralight,

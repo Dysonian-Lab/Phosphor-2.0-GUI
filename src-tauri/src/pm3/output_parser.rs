@@ -391,6 +391,18 @@ static T5577_CHIP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)Chip\s*(?:type)?\.+\s*(T55x7|T5555|T5577)").expect("bad t5577 chip regex")
 });
 
+/// `lf search` reports an unconfigured T55xx as a generic chipset, which is a
+/// different line shape from `lf t55xx detect`:
+///
+///   [+] Chipset... T55xx
+///
+/// T5577_CHIP_RE above matches `Chip type... T55x7` and will NOT match this --
+/// after "Chip" the next character is "s", not "." or whitespace, so its
+/// `\.+` fails. Hence the separate pattern.
+static LF_CHIPSET_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)Chipset\.+\s*(T55xx|T55x7|T5555|T5577)").expect("bad lf chipset regex")
+});
+
 static T5577_PASSWORD_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)Password\s*(?:set)?\.+\s*(Yes|No)").expect("bad t5577 password regex")
 });
@@ -415,7 +427,38 @@ static T5577_PASSWORD_FOUND_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub fn parse_lf_search(output: &str) -> Option<(CardType, CardData)> {
     let clean = strip_ansi(output);
 
-    // Check for no-card condition first
+    // Generic chipset detection. This MUST be checked before the "No known tags"
+    // guard below, because `lf search` prints in this order:
+    //
+    //   [-] No known 125/134 kHz tags found!
+    //   [+] Chipset... T55xx
+    //   [?] Hint: Try `lf t55xx` commands
+    //
+    // The "No known tags" line only means no *pre-defined* card type matched.
+    // A T5577 reports as an unknown chipset, which is still a real detection --
+    // and the real T5577 user is usually there to work with exactly that chip.
+    if let Some(caps) = LF_CHIPSET_RE.captures(&clean) {
+        let chipset = caps[1].to_uppercase();
+        let mut decoded = HashMap::new();
+        decoded.insert("type".to_string(), "T55xx".to_string());
+        decoded.insert("chipset".to_string(), chipset.clone());
+        decoded.insert(
+            "note".to_string(),
+            "T55xx config chip. Config blocks were read for cloning; \
+             use WRITE with a T5577 blank on the reader."
+                .to_string(),
+        );
+        return Some((
+            CardType::T55xx,
+            CardData {
+                uid: String::new(),
+                raw: chipset,
+                decoded,
+            },
+        ));
+    }
+
+    // No known tags AND no generic chipset -> genuinely nothing on the reader.
     if clean.contains("No known 125/134 kHz tags found") {
         return None;
     }
@@ -1798,6 +1841,74 @@ fn parse_noralsy(clean: &str) -> Option<(CardType, CardData)> {
 // T5577 detection
 // ---------------------------------------------------------------------------
 
+/// Parse `lf t55xx read -b <n>` output into the 4-byte block payload.
+///
+/// PM3 prints a table:
+///
+/// ```text
+/// [+] Page 0
+/// [+] blk | hex data | binary                     | ascii
+/// [+] ----+----------+-----------------------------+-------
+/// [+]  0   | 00000000 | 0000 0000 0000 0000 0000 | ........
+/// ```
+///
+/// A blank/unprogrammed T5577 prints only the header and exits -7, so `None`
+/// here means "no block data on this card" -- a real and common case the caller
+/// must handle, not a parse bug.
+pub fn parse_t55xx_read_block(output: &str) -> Option<String> {
+    let clean = strip_ansi(output);
+
+    for line in clean.lines() {
+        let line = line.trim();
+        // Skip the header row and its underline.
+        if line.contains("hex data") || line.starts_with("----+") {
+            continue;
+        }
+        let body = line.strip_prefix("[+]").unwrap_or(line).trim();
+        let mut parts = body.split('|');
+        // `continue`, not `?` -- banner lines such as "[+] Page 0" have no
+        // '|' at all, and bailing on them would discard the data row below.
+        let _blk = match parts.next() {
+            Some(b) => b,
+            None => continue,
+        };
+        let hex = match parts.next() {
+            Some(h) => h.trim(),
+            None => continue,
+        };
+        // 8 hex digits = 4 bytes.
+        if hex.len() == 8 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Some(hex.to_uppercase());
+        }
+    }
+    None
+}
+
+/// Parse `lf t55xx write -b <n> -d <hex> --verify` output.
+///
+/// PM3 reports failure with `[!!]` and success with a "written" confirmation.
+/// Verified against the live client for both shapes.
+pub fn parse_t55xx_write_result(output: &str) -> Result<String, String> {
+    let clean = strip_ansi(output);
+
+    if clean.contains("[!!]") {
+        let detail = clean
+            .lines()
+            .find(|l| l.contains("[!!]"))
+            .map(|l| l.trim().trim_start_matches("[!!]").trim())
+            .unwrap_or("write failed");
+        return Err(detail.to_string());
+    }
+
+    for marker in ["Successfully written", "Data written", "written to block"] {
+        if let Some(idx) = clean.find(marker) {
+            let tail: String = clean[idx..].chars().take(80).collect();
+            return Ok(tail.trim().to_string());
+        }
+    }
+    Ok(clean.trim().to_string())
+}
+
 /// Parse `lf t55xx detect` output for password status and chip info.
 pub fn parse_t5577_detect(output: &str) -> T5577Status {
     let clean = strip_ansi(output);
@@ -1988,6 +2099,55 @@ mod tests {
     use super::*;
     use crate::cards::types::CardType;
     use crate::pm3::command_builder::build_clone_command;
+
+    // -----------------------------------------------------------------------
+    // Generic T55xx chipset reported by `lf search`
+    // -----------------------------------------------------------------------
+
+    /// Verbatim output from `lf search` with an unconfigured T5577 on the LF
+    /// antenna, captured on COM24. PM3 exits -10 here, but the detection is real.
+    /// Regression test: the parser used to bail on "No known 125/134 kHz tags
+    /// found!" and return None, so the card was reported as not present.
+    #[test]
+    fn parse_lf_search_generic_t55xx_chipset() {
+        let output = "[=] Note: False Positives ARE possible\n\
+             [=] \n\
+             [=] Checking for known tags...\n\
+             [=] \n\
+             [-] No known 125/134 kHz tags found!\n\
+             [=] Searching for auth LF and special cases...\n\
+             [+] Chipset... T55xx\n\
+             [?] Hint: Try `lf t55xx` commands\n";
+
+        let (card_type, data) = parse_lf_search(output).expect("T55xx chipset should be a detection");
+        assert_eq!(card_type, CardType::T55xx);
+        assert_eq!(data.decoded.get("chipset").map(String::as_str), Some("T55XX"));
+    }
+
+    /// An empty antenna must still report "nothing found" -- the fix must not
+    /// turn every no-card result into a T55xx.
+    #[test]
+    fn parse_lf_search_no_card_still_none() {
+        let output = "[=] Checking for known tags...\n\
+             [-] No known 125/134 kHz tags found!\n\
+             [-] No known 125/134 kHz tags found!\n";
+        assert!(parse_lf_search(output).is_none());
+    }
+
+    /// A T55xx is a writable config chip, so it must be cloneable and must get
+    /// the WRITE button.
+    ///
+    /// This test previously asserted the opposite (`!is_cloneable()`), which
+    /// locked in the regression where a detected T55xx gave the user no way to
+    /// write it. `build_clone_command` still returns `None` because T55xx has no
+    /// single-shot clone command -- it is cloned block-by-block via
+    /// `build_t55xx_block_clone`, which `write_t5577_flow` handles separately.
+    #[test]
+    fn t55xx_is_cloneable() {
+        let decoded = std::collections::HashMap::new();
+        assert!(build_clone_command(&CardType::T55xx, "00112233", &decoded).is_none());
+        assert!(CardType::T55xx.is_cloneable());
+    }
 
     // -----------------------------------------------------------------------
     // Helper: build realistic PM3 `lf search` output
@@ -4080,3 +4240,81 @@ mod tests {
         assert_eq!(data.decoded.get("prng").unwrap(), "HARD");
     }
 }
+
+    /// Verbatim hf search log captured on COM24 against a legacy iClass card.
+    /// Regression: the card was reported as "No card found" even though PM3
+    /// printed "Valid iCLASS tag / PicoPass tag found".
+    #[test]
+    fn parse_hf_search_real_iclass_output() {
+        let output = "[+] loaded `D:/kilocode/Phosphor-debug/Phosphor2.2GUI/portable/.proxmark3/preferences.json`\n[+] execute command from commandline: hf search\n\n[+] Using UART port COM24\n[+] Communicating with PM3 over USB-CDC\n[+] Max frame size: 624 bytes\n[+] Emulator memory: 8192 bytes\n[usb|script] pm3 --> hf search\n\n[+] iCLASS / Picopass CSN: EF 82 06 03 F8 FF 12 E0 \n\n[+] Valid iCLASS tag / PicoPass tag found\n\n[?] Hint: Try `hf iclass` commands\n\n";
+        let (card_type, data) = parse_hf_search(output).expect("iCLASS should be detected");
+        assert_eq!(card_type, CardType::IClass);
+        assert_eq!(data.uid, "EF820603F8FF12E0");
+    }
+
+    /// DIAGNOSTIC (log 937, verbatim): the GUI ran `hf search` and got a port
+    /// failure rather than any tag output.
+    ///
+    /// Documented here because it is the *symptom* of the orphan-port bug, not a
+    /// parser defect. The parser is correct to return `None` here -- the real fix
+    /// lives in `connection.rs`: the 8s search cap killed `lf search` mid-run and
+    /// the orphaned child held COM24. `device_failure()` now turns this text into
+    /// an `Err` before the parser ever sees it, so the user gets a connection
+    /// error rather than "No card found".
+    #[test]
+    fn parse_hf_search_invalid_port_is_indistinguishable_from_empty_antenna() {
+        let port_down = "[=] Session log .../log_20260929025937.txt\n\n\
+             [+] execute command from commandline: hf search\n\n\
+             [+] Using UART port COM24\n\n\
+             [!] ERROR: invalid serial port COM24\n\n\
+             [?] Hint: Try the shell script ``./pm3 --list` to get a list of possible serial ports\n";
+
+        let empty_antenna = "[=] Checking for known tags...\n\
+             [-] No known/supported 13.56 MHz tags found!\n";
+
+        // Both collapse to `None` at the parser. `device_failure()` in
+        // connection.rs is what keeps the first one from ever getting here.
+        assert!(parse_hf_search(port_down).is_none());
+        assert!(parse_hf_search(empty_antenna).is_none());
+    }
+
+    // --- T55xx source-card read/write --------------------------------------
+
+    /// Verbatim `lf t55xx read -b 0` table shape from the live v4.23346 client.
+    #[test]
+    fn parse_t55xx_read_block_extracts_hex() {
+        let out = "[usb|script] pm3 --> lf t55xx read -b 0\n\n\
+             [+] Page 0\n\
+             [+] blk | hex data | binary                     | ascii\n\
+             [+] ----+----------+-----------------------------+-------\n\
+             [+]  0   | 80C84000 | 1000 0000 1100 1000 0100 0000 0000 0000 | ...C@..\n";
+        assert_eq!(parse_t55xx_read_block(out), Some("80C84000".to_string()));
+    }
+
+    /// A blank/unprogrammed T5577 prints only the header and exits -7. That is
+    /// the common case and must be reported as "no data", not a parse failure.
+    #[test]
+    fn parse_t55xx_read_block_blank_returns_none() {
+        let out = "[usb|script] pm3 --> lf t55xx read -b 0\n\n\
+             [+] Page 0\n\
+             [+] blk | hex data | binary                     | ascii\n\
+             [+] ----+----------+-----------------------------+-------\n";
+        assert_eq!(parse_t55xx_read_block(out), None);
+    }
+
+    /// A write failure must be reported, not silently accepted.
+    #[test]
+    fn parse_t55xx_write_result_detects_failure() {
+        let out = "[+] Page 0\n\
+             [!!] Write failed: no card detected\n";
+        assert!(parse_t55xx_write_result(out).is_err());
+    }
+
+    /// A successful write must parse Ok. Empty-ish output is still Ok, since
+    /// PM3's success wording varies.
+    #[test]
+    fn parse_t55xx_write_result_accepts_success() {
+        let out = "[+] Successfully written to block 3\n";
+        assert!(parse_t55xx_write_result(out).is_ok());
+        assert!(parse_t55xx_write_result("[+] Page 0\n").is_ok());
+    }

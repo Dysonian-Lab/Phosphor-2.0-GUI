@@ -83,6 +83,98 @@ pub fn build_t5577_wipe_with_password(password: &str) -> Result<String, String> 
     Ok(format!("lf t55xx wipe -p {}", password))
 }
 
+/// Read one 4-byte block from a T55xx source card.
+///
+/// Syntax verified against the live v4.23346 client:
+///   lf t55xx read -b <0-7> [-p <hex>]
+/// Blocks 0-7 hold the functional configuration; the read is what makes a
+/// source T55xx/T5577 clonable rather than just "detected".
+pub fn build_t55xx_read(block: u8) -> Result<String, String> {
+    validate_t55xx_block(block)?;
+    Ok(format!("lf t55xx read -b {}", block))
+}
+
+/// Write one 4-byte block to a T55xx target and verify it.
+///
+/// Syntax verified against the live v4.23346 client:
+///   lf t55xx write -b <0-7> -d <hex> [-p <hex>] --verify
+pub fn build_t55xx_write(block: u8, data: &str) -> Result<String, String> {
+    validate_t55xx_block(block)?;
+    validate_block_data(data)?;
+    Ok(format!("lf t55xx write -b {} -d {} --verify", block, data))
+}
+
+/// The key used to carry T55xx block data from the scan step to the write step.
+pub const T55XX_BLOCK_KEY_PREFIX: &str = "t55xx_blk_";
+
+/// Build the ordered list of `lf t55xx write` commands that copy a source
+/// T55xx's functional config onto a target blank.
+///
+/// The source blocks were captured during `lf search` by `parse_lf_search` and
+/// live in `decoded` under `t55xx_blk_<n>` keys. Blocks are written low-to-high
+/// because block 0 carries the config header the chip needs to stay in the right
+/// modulation mode for the later blocks to succeed.
+///
+/// Returns `(commands, blocks_written)`, or an error when no block data was
+/// captured -- writing a blank chip with no source data would silently produce a
+/// card that reads as all-zero, which is worse than a clear failure.
+pub fn build_t55xx_block_clone(
+    decoded: &std::collections::HashMap<String, String>,
+) -> Result<(Vec<String>, usize), String> {
+    let mut blocks: Vec<(u8, String)> = Vec::new();
+
+    for (key, value) in decoded {
+        if let Some(suffix) = key.strip_prefix(T55XX_BLOCK_KEY_PREFIX) {
+            if let Ok(n) = suffix.parse::<u8>() {
+                blocks.push((n, value.clone()));
+            }
+        }
+    }
+
+    if blocks.is_empty() {
+        return Err(
+            "No T55xx block data was captured from the source card. \
+             Rescan the source card, then write to the blank."
+                .to_string(),
+        );
+    }
+
+    // Low-to-high: block 0 sets up the modulation config for later blocks.
+    blocks.sort_by_key(|(n, _)| *n);
+
+    let mut commands = Vec::with_capacity(blocks.len());
+    for (n, data) in &blocks {
+        commands.push(build_t55xx_write(*n, data)?);
+    }
+
+    Ok((commands, blocks.len()))
+}
+
+/// T55xx functional configuration lives in blocks 0-7. Page 1 is the password
+/// page and is handled by a different command, so it is excluded here.
+fn validate_t55xx_block(block: u8) -> Result<(), String> {
+    if block > 7 {
+        return Err(format!(
+            "T55xx block must be 0-7 (got {}). Page 1 holds the password, not config data.",
+            block
+        ));
+    }
+    Ok(())
+}
+
+/// A T55xx block is exactly 4 bytes = 8 hex digits. PM3 rejects anything else,
+/// and passing a malformed value through produces an argparse error rather than
+/// a useful message.
+fn validate_block_data(data: &str) -> Result<(), String> {
+    if data.len() != 8 || !data.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "T55xx block data must be exactly 8 hex digits (4 bytes), got '{}'",
+            data
+        ));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // EM4305 blank management
 // ---------------------------------------------------------------------------
@@ -580,6 +672,12 @@ pub fn build_clone_command(
         // Non-cloneable LF types
         CardType::COTAG | CardType::EM4x50 | CardType::Hitag => None,
 
+        // A generic T55xx is cloned block-by-block from the source card's
+        // functional config (blocks 0-7). The block data is read during scan and
+        // carried in `decoded`, so this is handled by
+        // `build_t55xx_block_clone` rather than a single-shot clone command.
+        CardType::T55xx => None,
+
         // HF cloning not yet implemented in this module
         CardType::MifareClassic1K
         | CardType::MifareClassic4K
@@ -736,14 +834,18 @@ pub fn build_hf_14a_antifuzz_coll() -> &'static str {
 // LF T55xx v4.23346 additional commands
 // ---------------------------------------------------------------------------
 
-/// `lf t55xx set config` — configure T55xx tag parameters.
+/// `lf t55xx config` — get/set T55xx tag parameters (modulation, offset, rate).
+/// There is no `set` subcommand: `lf t55xx set config` makes PM3 print the whole
+/// t55xx help menu and exit 0. Non-interactive set uses the flags, e.g.
+/// `lf t55xx config --ASK --rate 40 -o 0`.
 pub fn build_lf_t55xx_set_config() -> &'static str {
-    "lf t55xx set config"
+    "lf t55xx config"
 }
 
-/// `lf t55xx chk pwds` — check T55xx passwords.
+/// `lf t55xx chk` — check T55xx passwords.
+/// `chk` takes no subcommand: `pwds`/`pwd` are rejected as unexpected arguments.
 pub fn build_lf_t55xx_chk_pwds() -> &'static str {
-    "lf t55xx chk pwds"
+    "lf t55xx chk"
 }
 
 /// `lf t55xx dangerraw` — raw T55xx danger mode.
@@ -945,8 +1047,9 @@ pub fn build_mf_gen3uid(uid: &str) -> String {
 }
 
 /// Gen3: write block 0 via APDU command. `block0`: 32 hex chars.
+/// The payload is positional on some builds but v4.23346 requires `-d`.
 pub fn build_mf_gen3blk(block0: &str) -> String {
-    format!("hf mf gen3blk {}", block0)
+    format!("hf mf gen3blk -d {}", block0)
 }
 
 /// Gen4 GTU/UMC: load full dump via gload.
@@ -1090,15 +1193,15 @@ pub fn build_mf_eload(filename: &str, size: Option<&str>) -> String {
 }
 
 /// Emulator: get a single block from emulator memory.
-/// v4.23346 syntax: `hf mf ejectblk --blk <n>`.
+/// v4.23346 syntax: `hf mf egetblk -b <n>`.
 pub fn build_mf_egetblk(blk: u16) -> String {
-    format!("hf mf ejectblk --blk {}", blk)
+    format!("hf mf egetblk -b {}", blk)
 }
 
 /// Emulator: get a sector from emulator memory.
-/// v4.23346 syntax: `hf mf ejectsc -s <n>`.
+/// v4.23346 syntax: `hf mf egetsc -s <n>`.
 pub fn build_mf_egetsc(sector: u16) -> String {
-    format!("hf mf ejectsc -s {}", sector)
+    format!("hf mf egetsc -s {}", sector)
 }
 
 /// Emulator: set a single block in emulator memory.
@@ -1241,7 +1344,7 @@ mod tests {
     #[test]
     fn mf_gen3blk_cmd() {
         let cmd = build_mf_gen3blk("0102030404080400000000000000BEEF");
-        assert_eq!(cmd, "hf mf gen3blk 0102030404080400000000000000BEEF");
+        assert_eq!(cmd, "hf mf gen3blk -d 0102030404080400000000000000BEEF");
     }
 
     // -- Gen4 GTU clone --
@@ -1510,12 +1613,12 @@ mod tests {
 
     #[test]
     fn lf_t55xx_set_config_cmd() {
-        assert_eq!(build_lf_t55xx_set_config(), "lf t55xx set config");
+        assert_eq!(build_lf_t55xx_set_config(), "lf t55xx config");
     }
 
     #[test]
     fn lf_t55xx_chk_pwds_cmd() {
-        assert_eq!(build_lf_t55xx_chk_pwds(), "lf t55xx chk pwds");
+        assert_eq!(build_lf_t55xx_chk_pwds(), "lf t55xx chk");
     }
 
     #[test]
@@ -1526,5 +1629,97 @@ mod tests {
     #[test]
     fn lf_t55xx_wakeup_cmd() {
         assert_eq!(build_lf_t55xx_wakeup(), "lf t55xx wakeup");
+    }
+
+    /// `hf mf gen3blk` takes the payload via `-d`. Without it PM3 rejects the
+    /// positional argument: `unexpected argument "..."`.
+    #[test]
+    fn mf_gen3blk_uses_dash_d() {
+        assert_eq!(build_mf_gen3blk("AABB"), "hf mf gen3blk -d AABB");
+    }
+
+    /// The emulator getters are `egetblk`/`egetsc`. `ejectblk`/`ejectsc` do not
+    /// exist in v4.23346 and make PM3 print the whole `hf mf` help menu, exit 0.
+    #[test]
+    fn mf_emulator_getters_are_eget_not_eject() {
+        assert_eq!(build_mf_egetblk(3), "hf mf egetblk -b 3");
+        assert_eq!(build_mf_egetsc(1), "hf mf egetsc -s 1");
+    }
+
+    // --- T55xx source-card clone -------------------------------------------
+    // Syntax below was verified against the live v4.23346 client via
+    // `lf t55xx read --help` and `lf t55xx write --help`.
+
+    #[test]
+    fn t55xx_read_uses_dash_b() {
+        assert_eq!(build_t55xx_read(0).unwrap(), "lf t55xx read -b 0");
+        assert_eq!(build_t55xx_read(7).unwrap(), "lf t55xx read -b 7");
+    }
+
+    #[test]
+    fn t55xx_write_uses_dash_b_dash_d_and_verify() {
+        assert_eq!(
+            build_t55xx_write(3, "11223344").unwrap(),
+            "lf t55xx write -b 3 -d 11223344 --verify"
+        );
+    }
+
+    /// Block 8 does not exist, and page 1 is the password page, not config.
+    #[test]
+    fn t55xx_rejects_out_of_range_block() {
+        assert!(build_t55xx_read(8).is_err());
+        assert!(build_t55xx_write(9, "11223344").is_err());
+    }
+
+    /// A T55xx block is exactly 4 bytes. Anything else produces an argparse
+    /// error from PM3 instead of a useful message.
+    #[test]
+    fn t55xx_rejects_malformed_block_data() {
+        for bad in ["", "1122", "1122334455", "1122334G", "1122 3344"] {
+            assert!(
+                build_t55xx_write(0, bad).is_err(),
+                "should have rejected: {:?}",
+                bad
+            );
+        }
+    }
+
+    /// Blocks must be written low-to-high: block 0 carries the config header
+    /// that puts the chip in the right modulation mode for the rest.
+    #[test]
+    fn t55xx_block_clone_orders_low_to_high() {
+        let mut decoded = std::collections::HashMap::new();
+        decoded.insert("t55xx_blk_3".to_string(), "33333333".to_string());
+        decoded.insert("t55xx_blk_0".to_string(), "00000000".to_string());
+        decoded.insert("t55xx_blk_1".to_string(), "11111111".to_string());
+        // Unrelated decoded fields must not be treated as blocks.
+        decoded.insert("type".to_string(), "T55xx".to_string());
+        decoded.insert("chipset".to_string(), "T55XX".to_string());
+
+        let (cmds, total) = build_t55xx_block_clone(&decoded).unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(cmds[0], "lf t55xx write -b 0 -d 00000000 --verify");
+        assert_eq!(cmds[1], "lf t55xx write -b 1 -d 11111111 --verify");
+        assert_eq!(cmds[2], "lf t55xx write -b 3 -d 33333333 --verify");
+    }
+
+    /// Writing a blank with no captured source data would silently produce an
+    /// all-zero card. That must be a clear error, not a quiet success.
+    #[test]
+    fn t55xx_block_clone_requires_source_data() {
+        let decoded = std::collections::HashMap::new();
+        assert!(build_t55xx_block_clone(&decoded).is_err());
+    }
+
+    /// A T55xx is a writable chip: it must be cloneable so the WRITE button
+    /// appears. It used to be hard-coded false, which left users with a detected
+    /// card and no way to write it.
+    #[test]
+    fn t55xx_is_cloneable() {
+        assert!(crate::cards::types::CardType::T55xx.is_cloneable());
+        assert_eq!(
+            crate::cards::types::CardType::T55xx.recommended_blank(),
+            crate::cards::types::BlankType::T5577
+        );
     }
 }

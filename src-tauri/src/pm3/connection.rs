@@ -65,10 +65,25 @@ pub fn emit_output(app: &AppHandle, text: &str, is_error: bool) {
 /// Maximum time to wait for a PM3 subprocess to complete (30 seconds).
 const PM3_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Timeout for the LF/HF scan sweeps.
+///
+/// These are full-spectrum searches, not quick tag probes. Measured on the
+/// rdv4 with a T5577 and a legacy iCLASS card:
+///   lf search  ~9-10.5s   (exit -10 on a blank T5577, after printing the chipset)
+///   hf search  ~10.8s     (exit 0 on a legacy iCLASS card)
+///
+/// The 8s `DETECT_COMMAND_TIMEOUT` used to be applied here, which was far too
+/// short: both searches were killed mid-run, the aborted child kept COM24 open,
+/// and the following search failed with "invalid serial port". That surfaced to
+/// the user as "No card found" for a card that was on the antenna. 30s restores
+/// the pre-regression behaviour.
+const SEARCH_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Shorter timeout for tag-detection commands (`hf 14b info`, `hf 15c info`, etc.).
 /// PM3 hangs when no tag of the requested type is on the reader — a 30s wait
-/// per panel click is unacceptable. Most PM3 info commands either succeed in
-/// 1-2s or fail fast with a "no tag found" message. 8s is generous.
+/// per panel click is unacceptable. These are single-protocol probes rather than
+/// full sweeps; measured at 1.9-3.8s (emrtd 2.1, 15 2.1, 14b 2.7, iclass 3.4,
+/// felica 3.8, legic 1.9). 8s is generous.
 const DETECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Per-port probe timeout during device detection — much shorter than the
@@ -115,11 +130,19 @@ static PORT_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// `wait` controls how long to wait for the subprocess. Pass
 /// `PM3_COMMAND_TIMEOUT` (30s) for normal commands and `DETECT_COMMAND_TIMEOUT`
 /// (8s) for tag-detection commands where PM3 hangs when no tag is present.
+/// `tolerate_nonzero` controls what happens when PM3 exits with a non-zero code.
+/// PM3 returns -2/-7/-10 for "no tag found" *even when it did detect something it
+/// could not fully classify*. Concretely, `lf search` on a T5577 prints
+/// `[-] No known 125/134 kHz tags found!` then `[+] Chipset... T55xx`, then exits
+/// -10. Callers that can interpret partial detections (the scan wizard) set this
+/// to true so the output survives and the parser decides. Everyone else keeps the
+/// strict error path.
 async fn execute_pm3(
     app: &AppHandle,
     port: &str,
     cmd: &str,
     wait: Duration,
+    tolerate_nonzero: bool,
 ) -> Result<String, AppError> {
     // Validate port format to prevent command injection via subprocess args
     if !PORT_RE.is_match(port) {
@@ -189,20 +212,40 @@ async fn execute_pm3(
         // No further fallback attempts needed regardless of exit code.
         let code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         return match code {
             0 => {
                 let cleaned = strip_ansi(&stdout);
+                // PM3 reports a command it does not recognise with exit code 0 and
+                // prints either an argparse error or the whole help menu for the
+                // command group. Treating that as success is what let
+                // `lf t55xx set config` and `hf mf ejectblk` ship unnoticed: the
+                // app rendered the help text as though it were a result.
+                if let Some(reason) = rejected_command(&cleaned) {
+                    return Err(AppError::CommandFailed(format!(
+                        "PM3 rejected the command ({})",
+                        reason
+                    )));
+                }
+                if let Some(reason) = device_failure(&cleaned) {
+                    return Err(AppError::CommandFailed(reason));
+                }
                 Ok(cleaned)
             }
             -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
             _ => {
-                let detail = if stderr.is_empty() {
-                    strip_ansi(&stdout)
-                } else {
-                    strip_ansi(&stderr)
-                };
+                // PM3 exits non-zero for "found something but could not classify
+                // it" as well as for "found nothing". `lf search` on an
+                // unconfigured T5577 prints "[+] Chipset... T55xx" and then exits
+                // -10, so discarding stdout here loses a real detection. Only the
+                // search callers opt in -- see the `tolerate_nonzero` docs above.
+                let cleaned = strip_ansi(&stdout);
+                if let Some(reason) = device_failure(&cleaned) {
+                    return Err(AppError::CommandFailed(reason));
+                }
+                if tolerate_nonzero && !cleaned.trim().is_empty() {
+                    return Ok(cleaned);
+                }
                 Err(AppError::CommandFailed(friendly_exit_code(code, cmd)))
             }
         };
@@ -265,7 +308,7 @@ fn friendly_exit_code(code: i32, cmd: &str) -> String {
 ///   cleans up the child process.
 pub async fn run_command(app: &AppHandle, port: &str, cmd: &str) -> Result<String, AppError> {
     emit_output(app, &format!("pm3 --> {}", cmd), false);
-    match execute_pm3(app, port, cmd, PM3_COMMAND_TIMEOUT).await {
+    match execute_pm3(app, port, cmd, PM3_COMMAND_TIMEOUT, false).await {
         Ok(output) => {
             emit_output(app, &output, false);
             Ok(output)
@@ -288,7 +331,7 @@ pub async fn run_command_quick(
     cmd: &str,
 ) -> Result<String, AppError> {
     emit_output(app, &format!("pm3 --> {} (quick)", cmd), false);
-    match execute_pm3(app, port, cmd, DETECT_COMMAND_TIMEOUT).await {
+    match execute_pm3(app, port, cmd, DETECT_COMMAND_TIMEOUT, false).await {
         Ok(output) => {
             emit_output(app, &output, false);
             Ok(output)
@@ -310,10 +353,133 @@ pub async fn run_command_quick(
     }
 }
 
+/// Run a card-search command (`lf search`, `hf search`) and return the output
+/// even when PM3 exits non-zero.
+///
+/// PM3 signals "found something but could not classify it" with a non-zero exit
+/// code while still printing the detection. `lf search` on a T5577 emits
+/// `[-] No known 125/134 kHz tags found!`, then `[+] Chipset... T55xx`, then
+/// exits -10. The strict `run_command` path discards stdout on any non-zero
+/// exit, so the scan wizard saw an error and reported "Scan failed" for a card
+/// that was sitting on the antenna.
+///
+/// The output parser is the authority on whether a card was actually found, so
+/// hand it everything and let it decide. Spawn failures and timeouts still
+/// return `Err` — only the exit-code handling is relaxed.
+pub async fn run_search_command(
+    app: &AppHandle,
+    port: &str,
+    cmd: &str,
+) -> Result<String, AppError> {
+    emit_output(app, &format!("pm3 --> {}", cmd), false);
+    // SEARCH_COMMAND_TIMEOUT, not DETECT_COMMAND_TIMEOUT: `lf search` and
+    // `hf search` are full-spectrum sweeps that legitimately take ~11s.
+    match execute_pm3(app, port, cmd, SEARCH_COMMAND_TIMEOUT, true).await {
+        Ok(output) => {
+            emit_output(app, &output, false);
+            Ok(output)
+        }
+        Err(e) => {
+            emit_output(app, &e.to_string(), true);
+            Err(e)
+        }
+    }
+}
+
+/// Detect PM3 output that means "I do not have that command", as opposed to a
+/// command that ran and found nothing.
+///
+/// Both shapes exit 0, so the exit code alone cannot tell them apart:
+///
+///   lf t55xx danger raw
+///   lf t55xx dangerraw: unexpected argument "raw"
+///   [!] Try 'lf t55xx dangerraw --help' for more information.
+///
+///   lf t55xx set config
+///   --------- operations ----------
+///   config      Set/Get T55XX configuration ...
+///
+/// The second form is an unknown *subcommand*: PM3 falls back to the help menu
+/// for the group. Section banners like `----- operations -----` only appear in
+/// that menu, so they are a reliable marker.
+fn rejected_command(cleaned: &str) -> Option<&'static str> {
+    if cleaned.contains("unexpected argument \"") {
+        return Some("unknown option or argument");
+    }
+    if cleaned.contains("for more information.") && cleaned.contains("--help'") {
+        return Some("command not recognised");
+    }
+    if HELP_BANNER_RE.is_match(cleaned) {
+        return Some("unknown subcommand, help menu printed instead");
+    }
+    None
+}
+
+static HELP_BANNER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-{5,}\s*(operations|recovery|simulation|notice|technical|magic gen|general)\s*-{5,}")
+        .expect("bad help banner regex")
+});
+
+/// Detect PM3 output that means the command never reached the device.
+///
+/// Without this, a dropped USB connection looks exactly like an empty antenna.
+/// `run_search_command` sets `tolerate_nonzero`, and PM3 exits 1 on a port
+/// failure while still printing several non-empty lines, so the port error was
+/// returned as a successful result. The parser then found no card in it and the
+/// wizard told the user to place a card that was already on the reader.
+///
+/// Checked on both the exit-0 and the tolerated non-zero paths, so it is
+/// independent of `tolerate_nonzero`.
+/// Append PM3's own error text to a friendly message.
+///
+/// `friendly_exit_code` produces the short human summary, but it discards what
+/// PM3 actually printed. That text is the only thing that distinguishes, for
+/// example, an unreadable card from a missing key file. Keep the summary first
+/// so existing wording stays intact, and only append when PM3 said something
+/// that is not just its own echo of the command.
+fn with_detail(message: String, detail: &str) -> String {
+    let detail = detail.trim();
+    // Drop the "execute command from commandline:" preamble and blank lines; keep
+    // the informative remainder.
+    let useful = detail
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("[+] execute command from commandline"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if useful.is_empty() {
+        message
+    } else {
+        format!("{} ({})", message, useful)
+    }
+}
+
+fn device_failure(cleaned: &str) -> Option<String> {
+    const MARKERS: &[&str] = &[
+        "invalid serial port",
+        "error opening serial port",
+        "failed to open the serial port",
+        "cannot open the port",
+        "could not open port",
+        "permission denied",
+    ];
+    // PM3's wording differs across platforms and versions ("Cannot open the
+    // port" vs "cannot open the port"), so match case-insensitively.
+    let lower = cleaned.to_lowercase();
+    for marker in MARKERS {
+        if lower.contains(marker) {
+            return Some(format!(
+                "Proxmark3 could not open the serial port ({}). Reconnect the device and try again.",
+                marker
+            ));
+        }
+    }
+    None
+}
+
 /// Heuristic: extract the tag type from a PM3 info command so the error
 /// message can say "No 14B tag found" instead of just "timed out".
-fn detect_tag_type(cmd: &str) -> &str {
-    if cmd.contains("14b") { "ISO 14443-B" }
+fn detect_tag_type(cmd: &str) -> &str {    if cmd.contains("14b") { "ISO 14443-B" }
     else if cmd.contains("14a") { "ISO 14443-A" }
     else if cmd.contains("15") { "ISO 15693" }
     else if cmd.contains("felica") { "Felica" }
@@ -726,7 +892,10 @@ async fn probe_port(app: &AppHandle, port: &str) -> Result<String, AppError> {
                 } else {
                     strip_ansi(&stderr)
                 };
-                Err(AppError::CommandFailed(friendly_exit_code(code, "hw version")))
+                Err(AppError::CommandFailed(with_detail(
+                    friendly_exit_code(code, "hw version"),
+                    &detail,
+                )))
             }
         };
     }
@@ -867,9 +1036,18 @@ async fn run_binary_direct(
         std_command.creation_flags(CREATE_NO_WINDOW);
         std_command.stdout(std::process::Stdio::piped());
         std_command.stderr(std::process::Stdio::piped());
-        
-        // Use tokio to wrap the sync command output
-        let output_future = tokio::process::Command::from(std_command).output();
+
+        // Use tokio to wrap the sync command output.
+        //
+        // kill_on_drop is essential, not an optimisation. When the timeout below
+        // fires, the future is dropped -- and tokio's default is kill_on_drop =
+        // false, which ORPHANS the PM3 child. The orphan keeps the serial port
+        // open, so the very next command fails with "invalid serial port".
+        // Measured on this device: `lf search` takes ~10s, so any cap below that
+        // produced a self-inflicted cascade of port errors.
+        let output_future = tokio::process::Command::from(std_command)
+            .kill_on_drop(true)
+            .output();
         let output = match timeout(wait, output_future).await {
             Err(_) => {
                 return Err(AppError::Timeout(format!(
@@ -894,6 +1072,9 @@ async fn run_binary_direct(
         match code {
             0 => {
                 let cleaned = strip_ansi(&stdout);
+                if let Some(reason) = device_failure(&cleaned) {
+                    return Err(AppError::CommandFailed(reason));
+                }
                 Ok(cleaned)
             }
             -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
@@ -903,7 +1084,10 @@ async fn run_binary_direct(
                 } else {
                     strip_ansi(&stderr)
                 };
-                Err(AppError::CommandFailed(friendly_exit_code(code, cmd)))
+                Err(AppError::CommandFailed(with_detail(
+                    friendly_exit_code(code, cmd),
+                    &detail,
+                )))
             }
         }
     }
@@ -912,7 +1096,10 @@ async fn run_binary_direct(
     {
         let mut command = tokio::process::Command::new(binary_path);
         command.args(&["-p", port, "-f", "-c", cmd]);
-        
+        // See the Windows branch above: without this a timed-out PM3 child is
+        // orphaned and keeps holding the serial port.
+        command.kill_on_drop(true);
+
         let output_future = command.output();
         let output = match timeout(wait, output_future).await {
             Err(_) => {
@@ -947,7 +1134,10 @@ async fn run_binary_direct(
                 } else {
                     strip_ansi(&stderr)
                 };
-                Err(AppError::CommandFailed(friendly_exit_code(code, cmd)))
+                Err(AppError::CommandFailed(with_detail(
+                    friendly_exit_code(code, cmd),
+                    &detail,
+                )))
             }
         }
     }
@@ -1021,9 +1211,9 @@ let output = match timeout(wait, output_future).await {
         Ok(Ok(output)) => output,
     };
 
-    let code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     match code {
         0 => {
@@ -1031,14 +1221,17 @@ let output = match timeout(wait, output_future).await {
             Ok(cleaned)
         }
         -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
-_ => {
-                let detail = if stderr.is_empty() {
-                    strip_ansi(&stdout)
-                } else {
-                    strip_ansi(&stderr)
-                };
-                Err(AppError::CommandFailed(friendly_exit_code(code, cmd)))
-            }
+        _ => {
+            let detail = if stderr.is_empty() {
+                strip_ansi(&stdout)
+            } else {
+                strip_ansi(&stderr)
+            };
+            Err(AppError::CommandFailed(with_detail(
+                friendly_exit_code(code, cmd),
+                &detail,
+            )))
+        }
     }
 }
 
@@ -1085,5 +1278,148 @@ fn extract_short_version(version_str: &str) -> String {
         rest[..end].to_string()
     } else {
         version_str.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rejected_command;
+
+    /// Verbatim PM3 output for `lf t55xx danger raw`. Exit code 0.
+    #[test]
+    fn flags_unexpected_argument() {
+        let out = "pm3 --> lf t55xx danger raw\n\
+                   lf t55xx dangerraw: unexpected argument \"raw\"\n\
+                   [!] Try 'lf t55xx dangerraw --help' for more information.\n";
+        assert!(rejected_command(out).is_some());
+    }
+
+    /// Verbatim PM3 output for `lf t55xx chk pwds`. Exit code 0.
+    #[test]
+    fn flags_unknown_chk_subcommand() {
+        let out = "lf t55xx chk: unexpected argument \"pwds\"\n";
+        assert!(rejected_command(out).is_some());
+    }
+
+    /// Verbatim PM3 output for `hf mf ejectblk --blk 0`: the whole `hf mf`
+    /// menu, exit code 0. Must not be reported as a successful command.
+    #[test]
+    fn flags_help_menu_instead_of_command() {
+        let out = "help             This help\n\
+                   list             List MIFARE history\n\
+                   -----------      ----------------------- recovery ---------------\n\
+                   darkside         Darkside attack\n\
+                   -----------      ----------------------- operations --------------\n\
+                   dump             Dump MIFARE Classic tag to binary file\n";
+        assert!(rejected_command(out).is_some());
+    }
+
+    /// Verbatim PM3 output for `lf t55xx set config`, which also printed the
+    /// group menu and exited 0.
+    #[test]
+    fn flags_t55xx_group_menu() {
+        let out = "-----------      ----------------------------- operations ---------------\n\
+                   config           Set/Get T55XX configuration (modulation, inverted, offset, rate)\n\
+                   detect           Try detecting the tag modulation\n";
+        assert!(rejected_command(out).is_some());
+    }
+
+    /// A real command that found nothing must not be flagged. This is the
+    /// `lf search` output for an LF card that produced no known match.
+    #[test]
+    fn accepts_normal_no_tag_output() {
+        let out = "[=] Note: False Positives ARE possible\n\
+                   [=] Checking for known tags...\n\
+                   [-] No known 125/134 kHz tags found!\n\
+                   [=] Searching for auth LF and special cases...\n\
+                   [+] Chipset... T55xx\n\
+                   [?] Hint: Try `lf t55xx` commands\n";
+        assert!(rejected_command(out).is_none());
+    }
+
+    /// A successful clone must not be flagged.
+    #[test]
+    fn accepts_successful_read() {
+        let out = "[+] Page 0\n\
+                   [+]  01 | 00000000 | 00000000000000000000000000000000 | ....\n";
+        assert!(rejected_command(out).is_none());
+    }
+
+    // --- device_failure(): a dropped port must not read as an empty antenna ---
+
+    use super::device_failure;
+
+    /// Verbatim `hf search` output from log 937, after the orphaned `lf search`
+    /// child took COM24. PM3 exits 1 here. This is the text that used to be
+    /// handed to the parser as a successful result, producing "No card found".
+    #[test]
+    fn flags_invalid_serial_port() {
+        let out = "[=] Session log .../log_20260929025937.txt\n\n\
+                   [+] execute command from commandline: hf search\n\n\
+                   [+] Using UART port COM24\n\n\
+                   [!] ERROR: invalid serial port COM24\n\n\
+                   [?] Hint: Try the shell script ``./pm3 --list` to get a list of possible serial ports\n";
+        assert!(device_failure(out).is_some());
+    }
+
+    #[test]
+    fn flags_port_open_failures() {
+        for marker in [
+            "Error opening serial port COM24",
+            "Failed to open the serial port",
+            "Cannot open the port COM24",
+        ] {
+            assert!(
+                device_failure(marker).is_some(),
+                "should have flagged: {}",
+                marker
+            );
+        }
+    }
+
+    /// The real `lf search` T5577 output must NOT be treated as a device
+    /// failure -- this is the case `tolerate_nonzero` exists to preserve, and it
+    /// still exits -10. Flagging it here would reintroduce "Scan failed".
+    #[test]
+    fn accepts_t55xx_search_output() {
+        let out = "[=] Checking for known tags...\n\
+                   [-] No known 125/134 kHz tags found!\n\
+                   [=] Searching for auth LF and special cases...\n\
+                   [+] Chipset... T55xx\n\
+                   [?] Hint: Try `lf t55xx` commands\n";
+        assert!(device_failure(out).is_none());
+    }
+
+    /// The real iCLASS `hf search` output (exit 0) must not be flagged.
+    #[test]
+    fn accepts_iclass_search_output() {
+        let out = "[+] iCLASS / Picopass CSN: EF 82 06 03 F8 FF 12 E0 \n\n\
+                   [+] Valid iCLASS tag / PicoPass tag found\n";
+        assert!(device_failure(out).is_none());
+    }
+
+    /// A genuinely empty antenna must not be flagged as a device failure --
+    /// that is a real "no card", not a connection problem.
+    #[test]
+    fn accepts_empty_antenna_output() {
+        let out = "[=] Checking for known tags...\n\
+                   [-] No known/supported 13.56 MHz tags found!\n";
+        assert!(device_failure(out).is_none());
+    }
+
+    /// The search timeout must exceed the measured runtime of the sweeps.
+    /// `lf search` measured 9-10.5s and `hf search` 10.8s on this device; the
+    /// previous 8s cap killed them mid-run and orphaned the child on COM24.
+    #[test]
+    fn search_timeout_exceeds_measured_sweep_duration() {
+        use super::{DETECT_COMMAND_TIMEOUT, SEARCH_COMMAND_TIMEOUT};
+        assert!(
+            SEARCH_COMMAND_TIMEOUT > std::time::Duration::from_secs(11),
+            "search sweeps take ~11s; {:?} is too short",
+            SEARCH_COMMAND_TIMEOUT
+        );
+        // The quick probe timeout is a genuinely different operation (single
+        // protocol, measured 1.9-3.8s) and is allowed to stay short.
+        assert!(DETECT_COMMAND_TIMEOUT < SEARCH_COMMAND_TIMEOUT);
     }
 }
