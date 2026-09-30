@@ -395,10 +395,24 @@ fn parse_iso14b_output(output: &str) -> Result<crate::Iso14bInfo, AppError> {
 }
 
 /// Helper to extract port from wizard machine state.
+///
+/// Falls back to the persistent `m.port` field, not just the `DeviceConnected`
+/// state. `WizardMachine::port` is set on `DeviceFound` and cleared only on
+/// `Reset`/`Disconnect`, and scanning moves `current` to `CardIdentified`,
+/// which carries no port. Without the fallback every command in this module
+/// failed with "device not connected" after any successful scan.
 fn get_port(machine: &State<'_, Mutex<WizardMachine>>) -> Result<String, AppError> {
-    let guard = machine.lock().map_err(|_| AppError::InvalidTransition("mutex poisoned".into()))?;
-    match &guard.current {
-        WizardState::DeviceConnected { port, .. } => Ok(port.clone()),
-        _ => Err(AppError::InvalidTransition("device not connected".into())),
+    let m = machine.lock().map_err(|e| {
+        AppError::CommandFailed(format!("State lock poisoned: {}", e))
+    })?;
+
+    if let WizardState::DeviceConnected { port, .. } = &m.current {
+        return Ok(port.clone());
     }
+
+    if let Some(port) = &m.port {
+        return Ok(port.clone());
+    }
+
+    Err(AppError::InvalidTransition("No device connected".to_string()))
 }

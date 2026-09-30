@@ -246,6 +246,18 @@ async fn execute_pm3(
                 if let Some(reason) = device_failure(&cleaned) {
                     return Err(AppError::CommandFailed(reason));
                 }
+                // PM3 signals "nothing found" inconsistently. `hf search`
+                // exits -10, but `hf 14a info`, `hf mf info` and `hf mfu info`
+                // exit 0 having printed only the connection banner. Those
+                // reached the UI as a blank, success-looking result, which is
+                // indistinguishable from the app being broken -- it made a
+                // card sitting outside the coil look like a dead reader.
+                if is_card_dependent(cmd) && is_banner_only(&cleaned) {
+                    return Err(AppError::CommandFailed(format!(
+                        "No tag detected running: {}. Place the card on the reader and try again.",
+                        cmd
+                    )));
+                }
                 Ok(cleaned)
             }
             -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
@@ -323,6 +335,47 @@ fn friendly_exit_code(code: i32, cmd: &str) -> String {
         -99 => format!("Fatal error running: {}", cmd),
         _ => format!("Exit code {}: {}", code, cmd),
     }
+}
+
+/// True for commands that interrogate a tag and therefore can only report
+/// "nothing here" rather than failing.
+///
+/// Deliberately limited to the `hf` and `lf` command groups. Device-level
+/// commands such as `hw version` are excluded because a silent success is
+/// normal for some of them, and turning that into an error would be wrong.
+fn is_card_dependent(cmd: &str) -> bool {
+    let c = cmd.trim_start();
+    c.starts_with("hf ") || c.starts_with("lf ") || c == "hf" || c == "lf"
+}
+
+/// True when PM3's output is nothing but the per-invocation connection banner.
+///
+/// Verbatim output of `hf mf info` with no card on the reader, exit code 0:
+/// ```text
+/// [=] Session log .../log_20260930155332.txt
+/// [+] loaded `.../preferences.json`
+/// [+] execute command from commandline: hf mf info
+/// [+] Using UART port COM19
+/// [+] Communicating with PM3 over USB-CDC
+/// [+] Max frame size: 624 bytes
+/// [+] Emulator memory: 8192 bytes
+/// [usb|script] pm3 --> hf mf info
+/// ```
+/// Nothing after that means no tag answered.
+fn is_banner_only(output: &str) -> bool {
+    output.lines().all(|line| {
+        let clean = strip_ansi(line);
+        let t = clean.trim();
+        t.is_empty()
+            || t.starts_with("[=] Session log")
+            || t.starts_with("[+] loaded `")
+            || t.starts_with("[+] execute command from commandline:")
+            || t.starts_with("[+] Using UART port")
+            || t.starts_with("[+] Communicating with PM3")
+            || t.starts_with("[+] Max frame size")
+            || t.starts_with("[+] Emulator memory")
+            || t.starts_with("[usb|script] pm3 -->")
+    })
 }
 
 /// Run a single PM3 command: spawns `proxmark3 -p {port} -f -c "{cmd}"`,
@@ -1358,7 +1411,7 @@ fn extract_short_version(version_str: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::rejected_command;
+    use super::{is_banner_only, is_card_dependent, rejected_command};
 
     /// Verbatim PM3 output for `lf t55xx danger raw`. Exit code 0.
     #[test]
@@ -1385,8 +1438,54 @@ mod tests {
                    -----------      ----------------------- recovery ---------------\n\
                    darkside         Darkside attack\n\
                    -----------      ----------------------- operations --------------\n\
-                   dump             Dump MIFARE Classic tag to binary file\n";
+dump             Dump MIFARE Classic tag to binary file\n";
         assert!(rejected_command(out).is_some());
+    }
+
+    // -- banner-only detection (empty output means "no tag") ----------------
+
+    /// Verbatim `hf mf info` output with no card on the reader. Exit code 0,
+    /// and nothing beyond the connection banner. Real capture, COM19.
+    const BANNER_ONLY: &str = "[=] Session log C:/tmp/.proxmark3/logs/log_20260930155332.txt\n\
+[+] execute command from commandline: hf mf info\n\
+\n\
+[+] Using UART port COM19\n\
+[+] Communicating with PM3 over USB-CDC\n\
+[+] Max frame size: 624 bytes\n\
+[+] Emulator memory: 8192 bytes\n\
+[usb|script] pm3 --> hf mf info\n";
+
+    #[test]
+    fn banner_only_is_detected() {
+        assert!(is_banner_only(BANNER_ONLY));
+    }
+
+    #[test]
+    fn banner_only_tolerates_empty_output() {
+        assert!(is_banner_only(""));
+        assert!(is_banner_only("\n\n"));
+    }
+
+    /// A real result must not be mistaken for "no tag". Taken from
+    /// logs/1247.md, the MIFARE Classic 1K detection.
+    #[test]
+    fn real_detection_is_not_banner_only() {
+        let out = "[+]  UID: 0C CB F0 CF   ( ONUID, re-used )\n\
+[+] ATQA: 00 04\n\
+[+]  SAK: 08 [2]\n\
+[+]    MIFARE Classic 1K\n";
+        assert!(!is_banner_only(out));
+    }
+
+    #[test]
+    fn card_dependent_covers_hf_and_lf_only() {
+        assert!(is_card_dependent("hf mf info"));
+        assert!(is_card_dependent("lf search"));
+        assert!(is_card_dependent("  hf 14a reader"));
+        // Device-level commands are excluded: silence is normal for them.
+        assert!(!is_card_dependent("hw version"));
+        assert!(!is_card_dependent("hw tune"));
+        assert!(!is_card_dependent("data geto"));
     }
 
     /// Verbatim PM3 output for `lf t55xx set config`, which also printed the
