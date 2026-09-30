@@ -2,10 +2,72 @@
 
 ## v2.2.0 — PM3 v4.23346 Alignment (September 2026)
 
-### ⚠ Critical scan and write fixes (rebuilt 29 Sep 2026)
-This build replaces the earlier 28 Sep v2.2.0 upload. If you downloaded that one,
-**please re-download** — it could not complete a scan.
+> **This build supersedes two earlier v2.2.0 uploads.** If you downloaded
+> either the 28 Sep or 29 Sep build, **please re-download** — the 28 Sep one
+> could not complete a scan, and the 29 Sep one had no DESFire tools and a
+> timeout bug on T55xx dictionary checks.
 
+### New: DESFire Advanced panel (full `hf mfdes`)
+
+A dedicated DESFire tab covering all **57** `hf mfdes` subcommands from
+v4.23346 — not just the handful that were previously reachable.
+
+- **Card info** — `info`, `getversion`, `getuid`, `freemem`, `mad`
+- **Applications** — `lsapp`, `getaids`, `getappnames`, `selectapp`,
+  `createapp`, `deleteapp`, `createdelegateapp`, `getdelegateappinfo`,
+  `selectisofid`
+- **Files** — `lsfiles`, `getfileids`, `getfileisoids`, `getfilesettings`,
+  `chfilesettings`, `createfile`, `createvaluefile`, `createrecordfile`,
+  `createmacfile`, `clearrecfile`, `deletefile`
+- **Data** — `read`, `write`, `value`, `changekey`, `auth`, `chkeysettings`,
+  `getkeysettings`, `getkeyversions`
+- **Dumping and key recovery** — `dump`, `detect`, `chk`, `default`
+- **Emulator (self-contained DESFire EV1 simulation)** — `eload`, `esave`,
+  `eview`, `view`, `sim`, `etest` (host-driven, no RF), `list`
+- **Card config** — `setconfig`, `pc`, `formatpicc`
+- **Brute force** — `bruteaid`, `bruteisofid`, `brutedamslot`
+- **DUOX / DESFire Light** — `verifycert`, `intauth`, `vdesign`
+- **MFC transfer** — `makemfclicense`, `createmfcmapping`
+
+**Correctness note.** Every option name was taken from the client's own
+`--help` output, and 36 generated command shapes were executed against real
+v4.23346 hardware/software to confirm they parse. Two traps were found and
+handled:
+
+- The shared authentication flags are **not** uniform. The client rejects a
+  command outright with `invalid option` for any flag its subcommand does not
+  declare — `lsapp` has no `--aid`, `default` has neither `--aid` nor
+  `--no-auth`, `createdelegateapp` has no `-n`, `selectisofid` spells it
+  `--isofid` rather than `--isoid`, and `chkeysettings` has no `--isoid`.
+  Each subcommand has its own verified allowlist.
+- **Key length is in bytes, not hex characters.** The help says
+  "8|16|24 hex bytes", but `desfire_get_key_length()` returns bytes
+  (DES = 8, 2TDEA = 16, 3TDEA = 24, AES = 16), so a valid key is 16, 32 or
+  48 hex characters.
+
+### Fixed: T55xx dictionary check timed out and broke the serial port
+
+`lf t55xx chk` measured **26.8 s** against the 30 s default command timeout —
+a 3-second margin. On a slower run it hit the cap, the Proxmark3 child was
+killed mid-attack **while still holding COM24**, and the next command then
+failed with `invalid serial port`. The app reported that as a device error
+rather than a result.
+
+Brute-force and dictionary-attack commands (`lf t55xx chk`/`bruteforce`,
+`hf 15 bruteforce`, `hf mf bruteforce`, `hf mfu desbrute`, `hf mfdes chk`,
+`hf mfdes bruteaid`, `hf mfdes bruteisofid`, `hf mfdes brutedamslot`) now get
+a **15-minute** budget. Ordinary probes keep the short timeout.
+
+### Improved: readable PM3 errors instead of exit-code integers
+
+Commands previously surfaced raw numbers such as
+`PM3 command failed: Exit code -20: hf mfdes getversion`. The documented
+`#define PM3_E*` codes from `pm3_cmd.h` are now mapped to plain language, so
+-20 reads `APDU exchange failed … Is a card of the expected type on the
+reader?`, -23 `Card left the field (tear-off)`, -28 `No key available`, and
+so on.
+
+### ⚠ Earlier critical scan and write fixes (29 Sep 2026)
 - **Scanning was broken for every card.** `lf search` and `hf search` are full
   sweeps that take ~10-11 seconds, but the app was timing them out at 8 seconds.
   The interrupted Proxmark3 process was not terminated and kept holding the
@@ -21,22 +83,20 @@ This build replaces the earlier 28 Sep v2.2.0 upload. If you downloaded that one
   non-cloneable, so a detected T55xx showed no WRITE button. Scanning a T55xx
   now reads its configuration blocks and WRITE copies them onto a T5577 blank,
   block by block, with verification after each write.
-- **PM3's own error text is now shown** when a command fails, instead of a
-  generic message.
-- 293 automated tests pass.
 
 ### Foundation: Iceman fork v4.23346 ("Frosty Lemon")
 - Upgraded the bundled Proxmark3 client to the Iceman fork v4.23346.
 - Rebuilt all 3 firmware images (rdv4, rdv4-bt, generic) from v4.23346 source.
-- **CAPABILITIES_VERSION is now 11** — client and firmware must be flashed as a matched pair or they refuse to talk.
+- **CAPABILITIES_VERSION is now 11** — client and firmware must be flashed as a
+  matched pair or they refuse to talk.
 
 ### Command alignment (v4.23346)
 - `hf mf cchk` + `hf mf aeschk` → merged into `hf mf chk`.
-- `hf mfdes chk` now runs with no args.
+- `hf mfdes chk` runs with no arguments by default; all of its flags are now
+  exposed in the DESFire panel.
 - `hf 14b valid` removed.
 
-### Advanced tab — 20 panels (up from 14)
-All v4.23346 commands exposed as buttons:
+### Advanced tab — 21 panels (up from 14)
 
 | Tab | Commands |
 |-----|----------|
@@ -45,7 +105,7 @@ All v4.23346 commands exposed as buttons:
 | Felica | info, sim from dump |
 | iCLASS | info, legbrute |
 | LEGIC | info |
-| DESFire | eload/esave/eview/dump/view/etest/sim/chk/detect |
+| **DESFire** | **all 57 `hf mfdes` subcommands — see above** |
 | **MF View** | view -f (RKF/VIGIK/HID PACS decode), view --selftest |
 | Calypso | info/dump/list |
 | ThinFilm | sniff, sim |
@@ -63,9 +123,14 @@ All v4.23346 commands exposed as buttons:
 | Antenna | hw measure |
 
 ### Evaluated master features (19 items)
-- **12 COMPLETE** — all commands from the unreleased CHANGELOG that exist in v4.23346 are now exposed in the GUI
-- **3 PARTIAL** — `hf mfdes chk` (flags only), `nfc encode` (record types only), `hf mfu ndefwrite` (record types only)
-- **4 N/A** — BWM BLE/WiFi/power (not in v4.23346), `hw powersave` (not in v4.23346), Flipper Zero link (firmware test scaffolding only, no CLI), ePassport (Kivy 60-100 MB, deferred)
+- **13 COMPLETE** — all commands from the unreleased CHANGELOG that exist in
+  v4.23346 are now exposed in the GUI. `hf mfdes chk` moved from PARTIAL to
+  COMPLETE with the DESFire panel.
+- **2 PARTIAL** — `nfc encode` (record types only), `hf mfu ndefwrite`
+  (record types only)
+- **4 N/A** — BWM BLE/WiFi/power (not in v4.23346), `hw powersave` (not in
+  v4.23346), Flipper Zero link (firmware test scaffolding only, no CLI),
+  ePassport (Kivy 60-100 MB, deferred)
 
 ### Build environment
 - ARM cross-compiler: `arm-none-eabi-gcc` 10.3.1 (ProxSpace toolchain).
@@ -73,11 +138,24 @@ All v4.23346 commands exposed as buttons:
 - Firmware built with `make fullimage PLATFORM=PM3RDV4 [PLATFORM_EXTRAS=...]`.
 
 ### Verification
-- `cargo build` — SUCCESS
-- `cargo test --lib` — 293 passed, 0 failed
-- `npm run build` — SUCCESS (3.33s)
+- `cargo test --lib` — **324 passed, 0 failed** (295 prior + 29 new)
+- `npx tsc --noEmit` — clean
 - `npm run tauri build` — SUCCESS (NSIS installer + portable ZIP)
 - Device verified on v4.23346 (`hw version` reports `Iceman/master/v4.23346`)
+
+### Release artifacts (current)
+
+| Asset | Size | SHA-256 |
+|-------|------|---------|
+| `Phosphor_2.2.0_x64-setup.exe` | 65,702,732 | `c9d26429d0ac20650e6fd5e8c2c79020fa687e96c12fba309ce182db53110327` |
+| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,430,670 | `646655382cfcfb10808d6853deff0b8eec433962957153a203b378cdccfb37d` |
+
+- `phosphor.exe` inside both artifacts: 20,006,912 bytes,
+  SHA-256 `f4feb30acbcd0e0e6ba4d7100f6e08997ac9583e12396820bbd84679d2038a32`
+- Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
+  build. A locally rebuilt client (prefix `B444910108AD`) fails against real
+  hardware with `Received packet frame with invalid CRC` and is never packaged.
+- Source: commit `b7f949a`, tagged `v2.2.0`.
 
 ## v2.1.0 — iCopy-X ICS Decoder Support (August 2026)
 - PM3 client rebuilt with iCopy-X patches.
@@ -95,13 +173,20 @@ The May 31, 2026 release incorrectly showed **v1.1.0** in file properties. This 
 **If you downloaded Phosphor 2.0.0 on or before July 5, 2026**, please re-download to obtain the correct **v2.0.0** build.
 
 ## Command behavior notes
-- **No tag found**: Several `hf` / `lf` information commands return non-zero exit codes when no tag is present. This is expected PM3 behavior and is now handled gracefully.
+- **No tag found**: Several `hf` / `lf` information commands return non-zero
+  exit codes when no tag is present. This is expected PM3 behavior and is now
+  handled gracefully — see the exit-code mapping above.
+- **Wrong card on the reader**: a DESFire command against a MIFARE Classic (or
+  vice versa) fails with a clear card-exchange or APDU error. That is the
+  reader reporting a mismatch, not a bug.
 - **`lf tune` syntax**: the command takes no positional argument. Do not append a value.
 - **`hw tune`**: informational only; it does not actively tune the antenna.
 - **iCLASS**: some commands hang without a built-in timeout. If a command appears frozen, cancel the connection and retry.
 - **`smart pps`**: requires RDV4 with smartcard module. Not available on PM5.
 - **`hf emrtd`**: online modes need an ISO 14443 tag; `hf emrtd test` and `hf emrtd list` work offline.
 - **`hf 14a antifuzz`**: fuzzes reader anticollision. Use `--coll` for collision storm mode.
+- **`hf mfdes sim` / `etest`**: need `hf mfdes eload` first. `etest` drives the
+  emulator from the host over USB with no RF involved.
 
 ## Portable structure
 ```
@@ -122,5 +207,5 @@ portable/
 - Windows 10 x64 with Proxmark3 USB + bundled client.
 - Missing binary / console popup issues resolved.
 - Serial port detection confirmed with heuristic scoring.
-- All 293 unit tests pass.
-- 20 Advanced tab panels functional.
+- All 324 unit tests pass.
+- 21 Advanced tab panels functional.

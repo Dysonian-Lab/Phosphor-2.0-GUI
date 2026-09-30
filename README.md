@@ -14,10 +14,13 @@ Phosphor wraps the Proxmark3 client into a visual wizard. You plug in your Proxm
 
 - **Iceman fork v4.23346** — upgraded PM3 firmware base to the latest upstream
 - **CAPABILITIES_VERSION 11** — client and firmware must be flashed as a matched pair
-- **20 Advanced tab panels** — up from 14. New tabs: MF View (RKF/VIGIK/HID PACS), eMRTD (PACE-CAM passport), Smart Card (ISO 7816-3 PPS), Antifuzz, T55xx, Trace
-- **New commands**: `hf mf view`, `hf 14b view -f` (MyKey/COGES), `smart pps`, `hf emrtd info/dump/list/test`, `trace clear`, `hf 14a antifuzz --coll`, `lf t55xx set config/chk pwds/dangerraw/wakeup`, `hf thinfilm sim`, `mad read/write/verify/decode/encode`, `nfc encode`, `hf mfu ndefwrite/ndefformat/chk`, `hf mfdes eload/esave/eview/dump/view/etest/sim/chk/detect`, `hf iclass legbrute`, `hf 14b rdbl/ctrdbl/view --selftest`, `hf calypso info/dump/list`, `hf felica sim`, `lf trovan`
-- **Command alignment** — `hf mf cchk` + `hf mf aeschk` merged into `hf mf chk`; `hf mfdes chk` now no-arg; `hf 14b valid` removed
-- **19 unreleased master features evaluated** — 12 fully covered, 3 partial, 4 N/A (BWM BLE/WiFi/power, hw powersave, Flipper Zero link, ePassport)
+- **21 Advanced tab panels** — up from 14. New tabs: DESFire, MF View (RKF/VIGIK/HID PACS), eMRTD (PACE-CAM passport), Smart Card (ISO 7816-3 PPS), Antifuzz, T55xx, Trace
+- **Full DESFire support** — a dedicated panel exposing all 57 `hf mfdes` subcommands: card info, application/file/key management, `read`/`write`/`value`, `dump`, `detect`, key `chk`, `bruteaid`, the self-contained EV1 emulator (`eload`/`esave`/`eview`/`view`/`sim`/`etest`), card configuration, and DUOX (`verifycert`, `intauth`, `vdesign`)
+- **New commands**: `hf mf view`, `hf 14b view -f` (MyKey/COGES), `smart pps`, `hf emrtd info/dump/list/test`, `trace clear`, `hf 14a antifuzz --coll`, `lf t55xx set config/chk pwds/dangerraw/wakeup`, `hf thinfilm sim`, `mad read/write/verify/decode/encode`, `nfc encode`, `hf mfu ndefwrite/ndefformat/chk`, `hf iclass legbrute`, `hf 14b rdbl/ctrdbl/view --selftest`, `hf calypso info/dump/list`, `hf felica sim`, `lf trovan`
+- **Command alignment** — `hf mf cchk` + `hf mf aeschk` merged into `hf mf chk`; `hf 14b valid` removed
+- **19 unreleased master features evaluated** — 13 fully covered, 2 partial, 4 N/A (BWM BLE/WiFi/power, hw powersave, Flipper Zero link, ePassport)
+- **Fixed: T55xx dictionary checks no longer time out** — `lf t55xx chk` took 26.8s against a 30s cap; on a slower run the Proxmark3 process was killed mid-attack while holding the serial port, breaking the *next* command. Brute-force commands now get a 15-minute budget
+- **Readable PM3 errors** — documented exit codes are translated into plain language instead of raw integers like `Exit code -20`
 
 ## Supported cards
 
@@ -27,7 +30,11 @@ HID ProxII, EM4100, AWID, IOProx, Indala, FDX-B, HID Corporate 1000, Paradox, Ke
 
 ### HF (13.56 MHz) - 6 types
 
-MIFARE Classic 1K/4K (with autopwn key recovery), MIFARE Ultralight, NTAG, iCLASS/PicoPass, DESFire (detection only, non-cloneable)
+MIFARE Classic 1K/4K (with autopwn key recovery), MIFARE Ultralight, NTAG, iCLASS/PicoPass, DESFire, DESFire Light (DUOX)
+
+DESFire cards are detected and can be fully managed from the **Advanced → DESFire**
+panel (dump, read/write, key recovery, emulator). They are not "cloned" onto a
+magic card the way MIFARE Classic is — DESFire has no universal magic card.
 
 ### Supported magic blanks
 
@@ -91,13 +98,15 @@ Phosphor_2.2_GUI_v2.2.0_Windows_Portable/
 - **Blank card data check** warns if the blank already has data written to it
 - **Firmware flash** with variant picker (RDV4, RDV4+BT, Generic)
 - **T5577 chip detection** and password-protected chip handling
-- **Advanced Tools tab** for ISO 14443-B/15693, Felica, iCLASS, LEGIC, Lua scripting, tuning, and antenna tests
+- **Advanced Tools tab** — 21 panels covering ISO 14443-B/15693, Felica, iCLASS, LEGIC, **DESFire**, MIFARE View, Calypso, ThinFilm, MAD, NFC, Ultralight, eMRTD, Smart Card, Antifuzz, T55xx, Trace, Lua scripting, firmware flashing, tuning and antenna tests
 - **Sound effects** and terminal-style UI
 
 ## Troubleshooting
 
 - **"Proxmark3 binary not found"**: ensure `phosphor.exe` and `proxmark3.exe` are in the same folder. Do not move DLLs out of that folder.
-- **"No tag found" / non-zero exit**: some PM3 commands intentionally return non-zero when no tag is present; this is expected and handled by the UI.
+- **"No tag found" / non-zero exit**: some PM3 commands intentionally return non-zero when no tag is present; this is expected and handled by the UI. Documented PM3 error codes are translated into readable messages.
+- **"APDU exchange failed"**: the card on the reader is not the type the command expects (e.g. a DESFire command run against a MIFARE Classic). Put the correct card on the reader.
+- **Commands that seem to hang**: dictionary and brute-force attacks legitimately run for minutes. They use a 15-minute timeout; ordinary commands time out in 30s.
 - **lf tune / hw tune**: `lf tune` takes no positional argument. `hw tune` is informational only; it does not actively tune the antenna.
 - **iCLASS hangs**: some iCLASS commands hang without a built-in timeout. If a command appears frozen, close the connection and retry with PM3 default behavior.
 - **Logs**: command output is captured and shown in the terminal panel. `.proxmark3` config and script data live under `%USERPROFILE%\.proxmark3\`.
