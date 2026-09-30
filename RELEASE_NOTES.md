@@ -2,10 +2,49 @@
 
 ## v2.2.0 — PM3 v4.23346 Alignment (September 2026)
 
-> **This build supersedes two earlier v2.2.0 uploads.** If you downloaded
-> either the 28 Sep or 29 Sep build, **please re-download** — the 28 Sep one
-> could not complete a scan, and the 29 Sep one had no DESFire tools and a
-> timeout bug on T55xx dictionary checks.
+> **This build supersedes three earlier v2.2.0 uploads.** If you downloaded
+> any earlier v2.2.0 build, **please re-download** — the 28 Sep one could not
+> complete a scan, the 29 Sep one had no DESFire tools and a timeout bug on
+> T55xx dictionary checks, and the 30 Sep (earlier) one could not run any
+> Advanced Mifare panel after a scan.
+
+### Fixed: every Advanced Mifare panel failed with "device not connected"
+
+After a successful scan, **every command in the MF View panel returned
+`Error: device not connected`**. The Mifare tools only worked if you connected
+to the reader and went straight to Advanced without scanning.
+
+Cause: the panel resolved the serial port out of the wizard state enum, and
+only the `DeviceConnected` state carries a port. Scanning moves the state to
+`CardIdentified`, which has no port, so every handler failed. It now falls back
+to the persistent connection record, matching the other 20 command modules
+that already worked.
+
+### Fixed: a missing card was reported as a blank success
+
+Proxmark3 signals "nothing found" inconsistently. `hf search` exits non-zero,
+but `hf 14a info`, `hf mf info` and `hf mfu info` **exit 0 having printed
+nothing but the connection banner**. Those reached the interface as an empty,
+success-looking result — indistinguishable from the app being broken, which
+made a card sitting outside the reader's coil look like a dead reader.
+
+Those commands now report:
+
+```
+No tag detected running: hf mf info. Place the card on the reader and try again.
+```
+
+Device-level commands such as `hw version` are deliberately excluded, because
+some of them legitimately print nothing.
+
+### Fixed: "no device" was reported as "proxmark3 is not installed"
+
+When no Proxmark3 answered the probe, the app said *"Proxmark3 binary not
+found. Ensure proxmark3 is installed and in your PATH."* — advice that is
+wrong when the client is bundled next to `phosphor.exe`. It matched on
+substrings of the error text, and the "no device answered" message contains the
+words "not found". It now distinguishes the two cases and, for devices with a
+PC mode such as the iCopy-X, tells you to switch to PC mode first.
 
 ### New: DESFire Advanced panel (full `hf mfdes`)
 
@@ -138,24 +177,29 @@ so on.
 - Firmware built with `make fullimage PLATFORM=PM3RDV4 [PLATFORM_EXTRAS=...]`.
 
 ### Verification
-- `cargo test --lib` — **324 passed, 0 failed** (295 prior + 29 new)
+- `cargo test --lib` — **328 passed, 0 failed** (324 prior + 4 new)
 - `npx tsc --noEmit` — clean
 - `npm run tauri build` — SUCCESS (NSIS installer + portable ZIP)
-- Device verified on v4.23346 (`hw version` reports `Iceman/master/v4.23346`)
+- Device verified on v4.23346, **iCopy-X** (`hw version` reports
+  `Iceman/master/v4.23346`, FPGA `fpga_icopyx_hf.ncd`)
+- `hf mf autopwn` verified live against a MIFARE Classic 1K: 31 keys recovered,
+  exit 0, 7 seconds, dump + key files written
 
 ### Release artifacts (current)
 
 | Asset | Size | SHA-256 |
 |-------|------|---------|
-| `Phosphor_2.2.0_x64-setup.exe` | 65,702,732 | `c9d26429d0ac20650e6fd5e8c2c79020fa687e96c12fba309ce182db53110327` |
-| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,430,670 | `646655382cfcfb10808d6853deff0b8eec433962957153a203b378cdccfb37d` |
+| `Phosphor_2.2.0_x64-setup.exe` | 65,696,804 | `b5f18f045d32e8eb40e50ae3d7341386ec7ee93995793aff1a8b5fd4b1075ef7` |
+| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,430,479 | `5e64ca0f45058eda7bc17cfd3c818f5278fe55e7b4af51a824b6a96a261b673d` |
 
-- `phosphor.exe` inside both artifacts: 20,006,912 bytes,
-  SHA-256 `f4feb30acbcd0e0e6ba4d7100f6e08997ac9583e12396820bbd84679d2038a32`
+- `phosphor.exe` inside both artifacts: 19,999,744 bytes,
+  SHA-256 `6bc1a026abeeb76c6a7a6cf1e8d5fa425d7a0ccb5ed1e0ecbe7791896352591b`
 - Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
-  build. A locally rebuilt client (prefix `B444910108AD`) fails against real
-  hardware with `Received packet frame with invalid CRC` and is never packaged.
-- Source: commit `b7f949a`, tagged `v2.2.0`.
+  build, `CAPABILITIES_VERSION 11`. A locally rebuilt client (prefix
+  `B444910108AD`) fails against real hardware with
+  `Received packet frame with invalid CRC` and is never packaged.
+  `build_portable.ps1` aborts rather than package an unverified client.
+- Source: commit `6fa272a`, tagged `v2.2.0`.
 
 ## v2.1.0 — iCopy-X ICS Decoder Support (August 2026)
 - PM3 client rebuilt with iCopy-X patches.
@@ -173,9 +217,14 @@ The May 31, 2026 release incorrectly showed **v1.1.0** in file properties. This 
 **If you downloaded Phosphor 2.0.0 on or before July 5, 2026**, please re-download to obtain the correct **v2.0.0** build.
 
 ## Command behavior notes
-- **No tag found**: Several `hf` / `lf` information commands return non-zero
-  exit codes when no tag is present. This is expected PM3 behavior and is now
-  handled gracefully — see the exit-code mapping above.
+- **No tag found**: Proxmark3 reports absence inconsistently. `hf search` exits
+  non-zero, while `hf 14a info` / `hf mf info` / `hf mfu info` exit 0 having
+  printed only the connection banner. Phosphor now detects the banner-only case
+  and reports *"No tag detected"* instead of showing a blank result.
+- **Card placement matters**: on a small HF coil (notably the iCopy-X) a card
+  can read and then stop reading as it is nudged. If a card is detected by
+  `hf search` but a follow-up command reports no tag, re-seat the card. This is
+  coupling, not a fault.
 - **Wrong card on the reader**: a DESFire command against a MIFARE Classic (or
   vice versa) fails with a clear card-exchange or APDU error. That is the
   reader reporting a mismatch, not a bug.
@@ -207,5 +256,7 @@ portable/
 - Windows 10 x64 with Proxmark3 USB + bundled client.
 - Missing binary / console popup issues resolved.
 - Serial port detection confirmed with heuristic scoring.
-- All 324 unit tests pass.
+- All 328 unit tests pass.
 - 21 Advanced tab panels functional.
+- Verified live on an iCopy-X: MIFARE Classic 1K (SAK 08) detected, `hf search`,
+  `hf mf autopwn` and the MF View panel all working.
