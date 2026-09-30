@@ -5,6 +5,7 @@ import { IclassSeStep } from './IclassSeStep';
 import { LegicStep } from './LegicStep';
 import { MfViewStep } from './MfViewStep';
 import { CalypsoStep } from './CalypsoStep';
+import { DesfireStep } from './DesfireStep';
 import { ThinfilmStep } from './ThinfilmStep';
 import { MadStep } from './MadStep';
 import { NfcStep } from './NfcStep';
@@ -24,7 +25,7 @@ import { useAdvanced } from '../../hooks/useAdvanced';
 export function AdvancedContainer() {
   const advanced = useAdvanced();
 
-  const [active, setActive] = React.useState<'iso14b'|'iso15'|'felica'|'iclass'|'legic'|'mfview'|'calypso'|'thinfilm'|'mad'|'nfc'|'mfu'|'emrtd'|'smartcard'|'antifuzz'|'t55xx'|'trace'|'script'|'firmware'|'tuning'|'antenna'>('iso14b');
+  const [active, setActive] = React.useState<'iso14b'|'iso15'|'felica'|'iclass'|'legic'|'mfview'|'calypso'|'desfire'|'thinfilm'|'mad'|'nfc'|'mfu'|'emrtd'|'smartcard'|'antifuzz'|'t55xx'|'trace'|'script'|'firmware'|'tuning'|'antenna'>('iso14b');
 
   return (
     <div style={{ padding: '24px' }}>
@@ -37,6 +38,7 @@ export function AdvancedContainer() {
         <button onClick={() => setActive('legic')}>LEGIC</button>
         <button onClick={() => setActive('mfview')}>Mifare View</button>
         <button onClick={() => setActive('calypso')}>Calypso</button>
+        <button onClick={() => setActive('desfire')}>DESFire</button>
         <button onClick={() => setActive('thinfilm')}>ThinFilm</button>
         <button onClick={() => setActive('mad')}>MAD</button>
         <button onClick={() => setActive('nfc')}>NFC</button>
@@ -59,6 +61,7 @@ export function AdvancedContainer() {
       {active === 'legic' && <LegicStep advanced={advanced} />}
       {active === 'mfview' && <MfViewStep advanced={advanced} />}
       {active === 'calypso' && <CalypsoStep advanced={advanced} />}
+      {active === 'desfire' && <DesfireStep advanced={advanced} />}
       {active === 'thinfilm' && <ThinfilmStep advanced={advanced} />}
       {active === 'mad' && <MadStep advanced={advanced} />}
       {active === 'nfc' && <NfcStep advanced={advanced} />}

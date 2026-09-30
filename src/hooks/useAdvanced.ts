@@ -1,5 +1,24 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listDumpFiles } from '../lib/api';
+import type {
+  DesfireAuthArgs,
+  DesfireBruteaidArgs,
+  DesfireBruteisofidArgs,
+  DesfireCertArgs,
+  DesfireChangekeyArgs,
+  DesfireChkArgs,
+  DesfireCreateappArgs,
+  DesfireCreatefileArgs,
+  DesfireDetectArgs,
+  DesfireDumpArgs,
+  DesfireListArgs,
+  DesfireMakelicenseArgs,
+  DesfirePcArgs,
+  DesfireReadArgs,
+  DesfireValueArgs,
+  DesfireVerifycertArgs,
+  DesfireWriteArgs,
+} from './desfireTypes';
 
 // Define the response types matching the Rust structs
 export interface Iso14bInfo {
@@ -102,6 +121,37 @@ export const useAdvanced = () => ({
   calypsoInfo: async () => invoke<string>('calypso_info'),
   calypsoDump: async () => invoke<string>('calypso_dump'),
   calypsoList: async () => invoke<string>('calypso_list'),
+
+  // DESFire v4.23346 (`hf mfdes`). Every subcommand below was taken from the
+  // live client's own --help output; option values are validated backend-side
+  // before the device is touched.
+  desfireAuth: async (a: DesfireAuthArgs) => invoke<string>('desfire_auth', a),
+  desfireBare: async (sub: string) => invoke<string>('desfire_bare', { sub }),
+  desfireDetect: async (a: DesfireDetectArgs) => invoke<string>('desfire_detect', a),
+  desfireChk: async (a: DesfireChkArgs) => invoke<string>('desfire_chk', a),
+  desfireDump: async (a: DesfireDumpArgs) => invoke<string>('desfire_dump', a),
+  desfireRead: async (a: DesfireReadArgs) => invoke<string>('desfire_read', a),
+  desfireWrite: async (a: DesfireWriteArgs) => invoke<string>('desfire_write', a),
+  desfireValue: async (a: DesfireValueArgs) => invoke<string>('desfire_value', a),
+  desfireFile: async (sub: string, file: string, keep = false, verbose = false) =>
+    invoke<string>('desfire_file', { sub, file: file || null, keep, verbose }),
+  desfireEtest: async (action: string, opts?: { apdu?: string; random?: string; json?: boolean }) =>
+    invoke<string>('desfire_etest', {
+      action,
+      apdu: opts?.apdu || null,
+      random: opts?.random || null,
+      json: opts?.json ?? false,
+    }),
+  desfireList: async (a: DesfireListArgs) => invoke<string>('desfire_list', a),
+  desfirePc: async (a: DesfirePcArgs) => invoke<string>('desfire_pc', a),
+  desfireCreateapp: async (a: DesfireCreateappArgs) => invoke<string>('desfire_createapp', a),
+  desfireCreatefile: async (a: DesfireCreatefileArgs) => invoke<string>('desfire_createfile', a),
+  desfireChangekey: async (a: DesfireChangekeyArgs) => invoke<string>('desfire_changekey', a),
+  desfireBruteaid: async (a: DesfireBruteaidArgs) => invoke<string>('desfire_bruteaid', a),
+  desfireBruteisofid: async (a: DesfireBruteisofidArgs) => invoke<string>('desfire_bruteisofid', a),
+  desfireCert: async (sub: string, a: DesfireCertArgs) => invoke<string>('desfire_cert', { sub, ...a }),
+  desfireVerifycert: async (a: DesfireVerifycertArgs) => invoke<string>('desfire_verifycert', a),
+  desfireMakelicense: async (a: DesfireMakelicenseArgs) => invoke<string>('desfire_makelicense', a),
 
   // Thinfilm v4.23346: sniff (sim needs a dump file — not exposed)
   thinfilmSniff: async () => invoke<string>('thinfilm_sniff'),

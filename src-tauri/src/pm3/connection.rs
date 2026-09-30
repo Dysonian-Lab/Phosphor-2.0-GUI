@@ -86,6 +86,22 @@ const SEARCH_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 /// felica 3.8, legic 1.9). 8s is generous.
 const DETECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Timeout for the long-running brute-force / dictionary-attack commands.
+///
+/// These are NOT quick panel probes. `lf t55xx chk` measured 26.8s on this
+/// hardware -- it loads ~123 passwords from t55xx_default_pwds.dic and tests
+/// each one against the tag ("[+] time in check pwd 26 seconds"). That is
+/// uncomfortably close to `PM3_COMMAND_TIMEOUT` (30s): on a slower run it hit
+/// the cap, the PM3 child was killed mid-brute-force, and because the child
+/// owns COM24 the NEXT command failed with "invalid serial port", which the
+/// user saw as the Chk-pwds button reporting a device error.
+///
+/// `lf t55xx bruteforce`, `hf 15 bruteforce`, `hf mf bruteforce` and
+/// `hf mfu desbrute` are the same class of operation and can run for many
+/// minutes on a real attack. 15 minutes leaves generous headroom over the
+/// observed 27s while still bounding the worst case.
+const LONG_COMMAND_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
 /// Per-port probe timeout during device detection — much shorter than the
 /// normal command timeout so scanning 40 COM ports doesn't take 20 minutes.
 /// A real PM3 responds to `hw version` in well under 2 seconds on a live port.
@@ -284,6 +300,27 @@ fn friendly_exit_code(code: i32, cmd: &str) -> String {
             }
         }
         251 => format!("PM3 timed out running: {}", cmd),
+        // Codes below come from the `#define PM3_E*` list in `pm3_cmd.h`.
+        -1 => format!("Undefined error running: {}", cmd),
+        -6 => format!("Command not implemented in this client running: {}", cmd),
+        -8 => format!("Communication error with the device running: {}", cmd),
+        -11 => format!("Flash error running: {}", cmd),
+        -13 => format!("File error (missing or unreadable) running: {}", cmd),
+        -16 => format!("Wrong answer from the card running: {}", cmd),
+        -18 => format!("Card exchange error running: {}", cmd),
+        -20 => format!("APDU exchange failed running: {}. Is a card of the expected type on the reader?", cmd),
+        -21 => format!("PM3 command failed running: {}", cmd),
+        -22 => format!("Partial result only running: {}", cmd),
+        -23 => format!("Card left the field (tear-off) running: {}", cmd),
+        -24 => format!("CRC error running: {}", cmd),
+        -25 => format!("Static nonce detected running: {}", cmd),
+        -26 => format!("No PACS session running: {}", cmd),
+        -27 => format!("Invalid length running: {}", cmd),
+        -28 => format!("No key available running: {}", cmd),
+        -29 => format!("Cryptographic error running: {}", cmd),
+        -30 => format!("No such file running: {}", cmd),
+        -98 => format!("No data available running: {}", cmd),
+        -99 => format!("Fatal error running: {}", cmd),
         _ => format!("Exit code {}: {}", code, cmd),
     }
 }
@@ -307,8 +344,15 @@ fn friendly_exit_code(code: i32, cmd: &str) -> String {
 /// - When the Tauri future is dropped (timeout or app shutdown), the shell plugin
 ///   cleans up the child process.
 pub async fn run_command(app: &AppHandle, port: &str, cmd: &str) -> Result<String, AppError> {
+    // Dictionary attacks run for minutes, not seconds. Give them their own
+    // budget so the PM3 child is never killed mid-run holding COM24.
+    let wait = if is_long_running(cmd) {
+        LONG_COMMAND_TIMEOUT
+    } else {
+        PM3_COMMAND_TIMEOUT
+    };
     emit_output(app, &format!("pm3 --> {}", cmd), false);
-    match execute_pm3(app, port, cmd, PM3_COMMAND_TIMEOUT, false).await {
+    match execute_pm3(app, port, cmd, wait, false).await {
         Ok(output) => {
             emit_output(app, &output, false);
             Ok(output)
@@ -318,6 +362,37 @@ pub async fn run_command(app: &AppHandle, port: &str, cmd: &str) -> Result<Strin
             Err(e)
         }
     }
+}
+
+/// True for the brute-force / dictionary-attack commands that legitimately run
+/// for minutes. `lf t55xx chk` measured 26.8s against the 30s
+/// `PM3_COMMAND_TIMEOUT`, so it was being killed mid-run and the aborted child
+/// held the serial port — the user saw "invalid serial port" instead of a
+/// result. Matched on a subcommand boundary so a longer dictionary is not
+/// required for the check to keep working.
+fn is_long_running(cmd: &str) -> bool {
+    const LONG: &[&str] = &[
+        "lf t55xx chk",
+        "lf t55xx bruteforce",
+        "lf t55xx brute",
+        "lf hid bruteforce",
+        "lf em bruteforce",
+        "hf 15 bruteforce",
+        "hf 15 brute",
+        "hf mf bruteforce",
+        "hf mf brute",
+        "hf mfu desbrute",
+        "hf mfdes chk",
+        "hf mfdes bruteaid",
+        "hf mfdes bruteisofid",
+        "hf mfdes brutedamslot",
+    ];
+    LONG.iter().any(|l| {
+        // Require the match to end at a boundary so "lf t55xx chk" does not
+        // accidentally match a longer command, and so we do not match
+        // "lf t55xx chkpwds-style" prefixes by accident.
+        cmd == *l || cmd.strip_prefix(l).is_some_and(|rest| rest.starts_with(' '))
+    })
 }
 
 /// Run a tag-detection command with a shorter timeout (8s).
@@ -1421,5 +1496,58 @@ mod tests {
         // The quick probe timeout is a genuinely different operation (single
         // protocol, measured 1.9-3.8s) and is allowed to stay short.
         assert!(DETECT_COMMAND_TIMEOUT < SEARCH_COMMAND_TIMEOUT);
+    }
+
+    /// `lf t55xx chk` measured 26.8s on this hardware (123-password dictionary).
+    /// It ran under the 30s `PM3_COMMAND_TIMEOUT` only by a 3s margin, and the
+    /// session log showed it hitting the cap: the child was killed mid-attack
+    /// and the next command failed with "invalid serial port". The long-command
+    /// budget must comfortably exceed the measured runtime.
+    #[test]
+    fn long_timeout_exceeds_measured_dictionary_attack() {
+        use super::{LONG_COMMAND_TIMEOUT, PM3_COMMAND_TIMEOUT};
+        assert!(
+            LONG_COMMAND_TIMEOUT > std::time::Duration::from_secs(60),
+            "dictionary attacks take far longer than a panel probe; {:?} is too short",
+            LONG_COMMAND_TIMEOUT
+        );
+        // It has to be strictly longer than the default, otherwise routing the
+        // command is pointless.
+        assert!(LONG_COMMAND_TIMEOUT > PM3_COMMAND_TIMEOUT);
+    }
+
+    /// The dictionary attacks must be routed to the long timeout, and ordinary
+    /// probes must not be. A loose `contains` match would also catch
+    /// "hf mf dump", so the boundary is asserted explicitly.
+    #[test]
+    fn classifies_long_running_commands() {
+        use super::is_long_running;
+        for cmd in [
+            "lf t55xx chk",
+            "lf t55xx bruteforce",
+            "hf 15 bruteforce",
+            "hf mf bruteforce",
+            "hf mfu desbrute",
+            "hf mfdes chk",
+            "hf mfdes bruteaid",
+        ] {
+            assert!(is_long_running(cmd), "{} should use the long timeout", cmd);
+        }
+        for cmd in [
+            "lf t55xx wakeup",
+            "lf t55xx read -b 0",
+            "hw version",
+            "hf mf dump",
+            "hf search",
+            // Guards the prefix-match boundary: must NOT be treated as `chk`.
+            "lf t55xx chkfoo",
+            "lf t55xx read",
+        ] {
+            assert!(
+                !is_long_running(cmd),
+                "{} must not use the long timeout",
+                cmd
+            );
+        }
     }
 }

@@ -3,6 +3,7 @@ pub mod dump;
 pub mod device;
 pub mod erase;
 pub mod calypso;
+pub mod desfire;
 pub mod emrtd;
 pub mod firmware;
 pub mod felica;
