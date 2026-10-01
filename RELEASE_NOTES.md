@@ -244,7 +244,7 @@ so on.
 - Firmware built with `make fullimage PLATFORM=PM3RDV4 [PLATFORM_EXTRAS=...]`.
 
 ### Verification
-- `cargo test --lib` — **328 passed, 0 failed** (324 prior + 4 new)
+- `cargo test --lib` — **338 passed, 0 failed** (328 prior + 10 new)
 - `npx tsc --noEmit` — clean
 - `npm run tauri build` — SUCCESS (NSIS installer + portable ZIP)
 - Device verified on v4.23346, **iCopy-X** (`hw version` reports
@@ -256,17 +256,17 @@ so on.
 
 | Asset | Size | SHA-256 |
 |-------|------|---------|
-| `Phosphor_2.2.0_x64-setup.exe` | 65,696,804 | `b5f18f045d32e8eb40e50ae3d7341386ec7ee93995793aff1a8b5fd4b1075ef7` |
-| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,430,479 | `5e64ca0f45058eda7bc17cfd3c818f5278fe55e7b4af51a824b6a96a261b673d` |
+| `Phosphor_2.2.0_x64-setup.exe` | 65,735,615 | `2b19f8c140b10d9dfdecd957ca234c4d3473e81abdea3aabf4cee020fc4cc43f` |
+| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,442,787 | `2b9b6ffbdc80b63ccde0f0a1e12d87181f8217f4a3c02080d08ab740bbd0d10d` |
 
-- `phosphor.exe` inside both artifacts: 19,999,744 bytes,
-  SHA-256 `6bc1a026abeeb76c6a7a6cf1e8d5fa425d7a0ccb5ed1e0ecbe7791896352591b`
+- `phosphor.exe` inside both artifacts: 20,051,456 bytes,
+  SHA-256 `3cbb9d61e1b171d37bb36ae727baae7ffa6b5fcd55d6b39e91383e00a2fe65d6`
 - Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
   build, `CAPABILITIES_VERSION 11`. A locally rebuilt client (prefix
   `B444910108AD`) fails against real hardware with
   `Received packet frame with invalid CRC` and is never packaged.
   `build_portable.ps1` aborts rather than package an unverified client.
-- Source: commit `6fa272a`, tagged `v2.2.0`.
+- Source: commit `106330d`, tagged `v2.2.0`.
 
 ## v2.1.0 — iCopy-X ICS Decoder Support (August 2026)
 - PM3 client rebuilt with iCopy-X patches.
@@ -323,7 +323,7 @@ portable/
 - Windows 10 x64 with Proxmark3 USB + bundled client.
 - Missing binary / console popup issues resolved.
 - Serial port detection confirmed with heuristic scoring.
-- All 328 unit tests pass.
+- All 338 unit tests pass.
 - 21 Advanced tab panels functional.
 - Verified live on an iCopy-X: MIFARE Classic 1K (SAK 08) detected, `hf search`,
   `hf mf autopwn` and the MF View panel all working.
