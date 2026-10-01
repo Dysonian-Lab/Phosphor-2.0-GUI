@@ -279,9 +279,22 @@ async fn write_t5577_flow(
                 None => cmd,
             };
             log::debug!("sending={}", final_cmd);
-            // A `lf t55xx write` is a memory command and must be chained after
-            // `lf t55xx detect` in the same client process, or it silently does
-            // nothing on the card. Anything else keeps the plain path.
+
+            // Cloning ONTO a T5577 blank is the one operation that must run in
+            // the same client process as `lf t55xx detect`, exactly like the
+            // block reads. `lf t55xx detect` is what loads the chip's modulation
+            // config into the running client; Phosphor spawns a fresh
+            // proxmark3.exe per command, so that state is gone otherwise and the
+            // clone has nothing valid to write against.
+            //
+            // iCopy-X does the same thing, in this order, in lfwrite.write():
+            //   check_detect()  ->  wipe p 20206666; lf t55xx detect
+            //   PAR_CLONE_MAP   ->  lf em 410x clone --id <hex>
+            // so detect is established first, then the single clone command.
+            //
+            // Only the `lf t55xx write` family needs the chaining wrapper; the
+            // per-type clone commands take no arguments from the detect state and
+            // are sent unchanged.
             let clone_output = if final_cmd.starts_with("lf t55xx ")
                 && !final_cmd.starts_with("lf t55xx chk")
                 && !final_cmd.starts_with("lf t55xx config")
@@ -305,10 +318,28 @@ async fn write_t5577_flow(
                 );
             }
         }
-        None if card_type == &CardType::T55xx => {
-            // T55xx is cloned block-by-block from the source card's config
-            // blocks, which were captured during scan. There is no single-shot
-            // clone command for this chipset.
+        // T55xx config blocks are cloned block-by-block from the source card.
+        // There is no single-shot clone command for this chipset.
+        //
+        // Routing is on the PRESENCE OF BLOCKS, not on the identified card type.
+        // A T5577 is a universal tag: block 0 holds the config that decides what
+        // the chip emulates, so copying the blocks onto a blank reproduces the
+        // tag regardless of what the source card was currently identified as.
+        // Plenty of source cards report as EM410x while ALSO carrying a T55xx
+        // config block (very common on test cards), and gating on
+        // `card_type == CardType::T55xx` sent those down the "cannot be cloned"
+        // path even though their blocks had been read successfully.
+        //
+        // `--w` / `--d` writes per block are the verified-correct route; `wipe`
+        // is deliberately not used, since it often fails and is unnecessary when
+        // the blocks are simply overwritten.
+        None if has_t55xx_blocks(decoded) => {
+            // SAFETY: `t55xx_chipset` was written by parse_lf_search and is
+            // always "T55XX"-shaped; blocks are only present with it.
+            log::debug!(
+                "T55xx block clone path for {:?} (blocks present)",
+                card_type
+            );
             if let Err(e) = write_t55xx_blocks(app, port, decoded, machine).await {
                 return report_error(
                     machine,
@@ -345,6 +376,16 @@ async fn write_t5577_flow(
         })?;
         m.current.clone()
     })
+}
+
+/// True when the scan captured T55xx config blocks on the source card.
+///
+/// This is the routing signal for the block-copy path, deliberately NOT the
+/// identified card type: a T5577 source is frequently identified as EM410x (or
+/// other) while still carrying the config blocks that make it a universal tag.
+fn has_t55xx_blocks(decoded: &std::collections::HashMap<String, String>) -> bool {
+    use crate::pm3::command_builder::T55XX_BLOCK_KEY_PREFIX;
+    decoded.keys().any(|k| k.starts_with(T55XX_BLOCK_KEY_PREFIX))
 }
 
 /// Write the source T55xx's config blocks onto the blank on the reader.
@@ -615,4 +656,81 @@ fn report_error(
         recovery_action,
     })?;
     Ok(m.current.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_t55xx_blocks;
+
+    /// A source card identified as EM410x but carrying T55xx config blocks must
+    /// still take the block-copy path. This is the user's card (logs 1344-1360):
+    /// `lf search` reported `EM 410x ID 4E008E7AC1` alongside `[+] Chipset... T55xx`,
+    /// and blocks 0-2 were read successfully. Routing on card type sent it to
+    /// "this card type cannot be cloned" instead of copying the blocks.
+    #[test]
+    fn em410x_with_blocks_routes_to_block_copy() {
+        let decoded: std::collections::HashMap<String, String> = [
+            ("type", "EM4100"),
+            ("id", "4E008E7AC1"),
+            ("t55xx_chipset", "T55XX"),
+            ("t55xx_blk_0", "00148040"),
+            ("t55xx_blk_1", "FFA7A004"),
+            ("t55xx_blk_2", "7AFA6078"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert!(
+            has_t55xx_blocks(&decoded),
+            "EM410x card with T55xx blocks must take the block-copy path"
+        );
+    }
+
+    /// A single block is enough -- blocks 3-7 read as zeros on a partially
+    /// written card, but block 0 alone still reproduces the tag.
+    #[test]
+    fn single_block_is_enough_to_route() {
+        let decoded: std::collections::HashMap<String, String> =
+            [("t55xx_blk_0", "00148040")]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        assert!(has_t55xx_blocks(&decoded));
+    }
+
+    /// An EM410x card with NO config blocks must not be routed to the T55xx
+    /// writer; it has nothing to copy block-wise.
+    #[test]
+    fn em410x_without_blocks_does_not_route() {
+        let decoded: std::collections::HashMap<String, String> = [
+            ("type", "EM4100"),
+            ("id", "0F00112233"),
+            ("t55xx_chipset", "T55XX"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert!(!has_t55xx_blocks(&decoded));
+    }
+
+    #[test]
+    fn empty_decoded_does_not_route() {
+        let decoded = std::collections::HashMap::new();
+        assert!(!has_t55xx_blocks(&decoded));
+    }
+
+    /// The key prefix must not be matched loosely -- an unrelated decoded field
+    /// must never be mistaken for block data.
+    #[test]
+    fn unrelated_keys_do_not_route() {
+        let decoded: std::collections::HashMap<String, String> = [
+            ("type", "EM4100"),
+            ("t55xx_chipset", "T55XX"),
+            ("blkid", "0"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert!(!has_t55xx_blocks(&decoded));
+    }
 }

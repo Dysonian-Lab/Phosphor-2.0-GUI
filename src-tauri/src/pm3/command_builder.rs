@@ -111,9 +111,18 @@ pub const T55XX_BLOCK_KEY_PREFIX: &str = "t55xx_blk_";
 /// T55xx's functional config onto a target blank.
 ///
 /// The source blocks were captured during `lf search` by `parse_lf_search` and
-/// live in `decoded` under `t55xx_blk_<n>` keys. Blocks are written low-to-high
-/// because block 0 carries the config header the chip needs to stay in the right
-/// modulation mode for the later blocks to succeed.
+/// live in `decoded` under `t55xx_blk_<n>` keys.
+///
+/// ORDER: data blocks 1..N first, block 0 (the modulation/bit-rate config word)
+/// LAST. Block 0 changes how the chip demodulates, so writing it early makes the
+/// tag re-modulate while the data blocks are still incomplete and the remaining
+/// writes land wrong. Writing the config last keeps the chip in a known state
+/// until all data is down.
+///
+/// This matches the iCopy-X open-source middleware, `lfwrite.write_raw()`:
+/// "Data blocks 1..N are written FIRST, then config block 0 LAST. Block 0 sets
+/// modulation/bit-rate -- writing it last avoids the tag re-modulating
+/// mid-sequence while data blocks are incomplete."
 ///
 /// Returns `(commands, blocks_written)`, or an error when no block data was
 /// captured -- writing a blank chip with no source data would silently produce a
@@ -139,8 +148,8 @@ pub fn build_t55xx_block_clone(
         );
     }
 
-    // Low-to-high: block 0 sets up the modulation config for later blocks.
-    blocks.sort_by_key(|(n, _)| *n);
+    // Data blocks ascending, config block 0 last.
+    blocks.sort_by_key(|(n, _)| if *n == 0 { u8::MAX } else { *n });
 
     let mut commands = Vec::with_capacity(blocks.len());
     for (n, data) in &blocks {
@@ -1684,10 +1693,52 @@ mod tests {
         }
     }
 
-    /// Blocks must be written low-to-high: block 0 carries the config header
-    /// that puts the chip in the right modulation mode for the rest.
+    /// Dry-run against the LIVE block values read from the user's card on COM19
+    /// (2026-10-01 15:26). Verifies the real write ordering without touching
+    /// hardware. Source blocks: 0=00148040 1=FFA7A004 2=7AFA6078 3..7=0.
     #[test]
-    fn t55xx_block_clone_orders_low_to_high() {
+    fn live_blocks_produce_config_last_ordering() {
+        let mut decoded = std::collections::HashMap::new();
+        for (n, v) in [
+            (0u8, "00148040"),
+            (1, "FFA7A004"),
+            (2, "7AFA6078"),
+            (3, "00000000"),
+            (4, "00000000"),
+            (5, "00000000"),
+            (6, "00000000"),
+            (7, "00000000"),
+        ] {
+            decoded.insert(format!("t55xx_blk_{}", n), v.to_string());
+        }
+
+        let (cmds, total) = build_t55xx_block_clone(&decoded).unwrap();
+        eprintln!("--- WRITE ORDER FOR LIVE CARD ({} blocks) ---", total);
+        for (i, c) in cmds.iter().enumerate() {
+            eprintln!("  {:>2}. {}", i + 1, c);
+        }
+
+        assert_eq!(total, 8);
+        assert!(
+            cmds[7].contains("-b 0 -d 00148040"),
+            "block 0 must be written LAST, got: {}",
+            cmds[7]
+        );
+        assert!(cmds[0].contains("-b 1 -d FFA7A004"), "got: {}", cmds[0]);
+        assert!(cmds[1].contains("-b 2 -d 7AFA6078"), "got: {}", cmds[1]);
+        for c in cmds.iter().take(7) {
+            assert!(!c.contains("-b 0 "), "block 0 appeared early: {}", c);
+        }
+        eprintln!("OK: data blocks 1..7 ascending, config block 0 LAST");
+    }
+    /// Data blocks ascending, config block 0 LAST.
+    ///
+    /// Block 0 is the modulation/bit-rate config word. Writing it first makes
+    /// the tag re-modulate while the data blocks are still incomplete, so the
+    /// later writes land wrong. iCopy-X's `lfwrite.write_raw()` documents the
+    /// same ordering requirement.
+    #[test]
+    fn t55xx_block_clone_writes_config_block_zero_last() {
         let mut decoded = std::collections::HashMap::new();
         decoded.insert("t55xx_blk_3".to_string(), "33333333".to_string());
         decoded.insert("t55xx_blk_0".to_string(), "00000000".to_string());
@@ -1698,9 +1749,56 @@ mod tests {
 
         let (cmds, total) = build_t55xx_block_clone(&decoded).unwrap();
         assert_eq!(total, 3);
-        assert_eq!(cmds[0], "lf t55xx write -b 0 -d 00000000 --verify");
-        assert_eq!(cmds[1], "lf t55xx write -b 1 -d 11111111 --verify");
-        assert_eq!(cmds[2], "lf t55xx write -b 3 -d 33333333 --verify");
+        // Data blocks first, in ascending order...
+        assert_eq!(cmds[0], "lf t55xx write -b 1 -d 11111111 --verify");
+        assert_eq!(cmds[1], "lf t55xx write -b 3 -d 33333333 --verify");
+        // ...and the modulation config word LAST.
+        assert_eq!(cmds[2], "lf t55xx write -b 0 -d 00000000 --verify");
+    }
+
+    /// Block 0 must be last regardless of how many data blocks there are.
+    #[test]
+    fn t55xx_block_clone_config_block_is_always_final() {
+        let mut decoded = std::collections::HashMap::new();
+        for n in 0..8u8 {
+            // Distinct, always-valid 8-hex-digit block values (no overflow).
+            decoded.insert(format!("t55xx_blk_{}", n), format!("{:07X}A", n));
+        }
+        let (cmds, total) = build_t55xx_block_clone(&decoded).unwrap();
+        assert_eq!(total, 8);
+        assert!(
+            cmds.last().unwrap().contains("-b 0 -d"),
+            "block 0 must be the final write, got {:?}",
+            cmds.last()
+        );
+        for (i, cmd) in cmds.iter().enumerate().take(7) {
+            assert!(
+                !cmd.contains("-b 0 -d"),
+                "block 0 appeared early at index {}: {}",
+                i,
+                cmd
+            );
+        }
+    }
+
+    /// Data blocks keep ascending order among themselves.
+    #[test]
+    fn t55xx_block_clone_data_blocks_ascend() {
+        let mut decoded = std::collections::HashMap::new();
+        for n in 1..7u8 {
+            decoded.insert(format!("t55xx_blk_{}", n), format!("AAAAAAA{:X}", n));
+        }
+        let (cmds, _) = build_t55xx_block_clone(&decoded).unwrap();
+        let written: Vec<u8> = cmds
+            .iter()
+            .filter_map(|c| {
+                c.split("-b ")
+                    .nth(1)
+                    .and_then(|s| s.split(' ').next())
+                    .and_then(|s| s.parse::<u8>().ok())
+            })
+            .collect();
+        assert_eq!(written, vec![1, 2, 3, 4, 5, 6]);
     }
 
     /// Writing a blank with no captured source data would silently produce an

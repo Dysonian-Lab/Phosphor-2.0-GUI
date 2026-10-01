@@ -62,10 +62,24 @@ Proxmark refuses to talk.
 > ⚠️ **Phosphor does not update or flash an iCopy-X.**
 >
 > Updating an iCopy-X is an **IPK update performed on the device**, not a
-> Proxmark firmware flash from the desktop. Per
+> Proxmark firmware flash from the desktop. This is a manual, optional step —
+> if your device already reports Iceman v4.23346, you do not need to do
+> anything.
+>
+> Note that three different version numbers are in play, and they are not
+> interchangeable:
+>
+> | Version | What it is |
+> |---|---|
+> | `1.0.90` | The device's own base/bootloader firmware. A **precondition**, not an upgrade target. |
+> | `v1.1.5` / `v1.1.6` | The **IPK package** (device shell + menus). |
+> | `v4.23346` | The **Iceman Proxmark client/firmware bundled inside** that IPK — what Phosphor talks to. |
+>
+> v1.1.5 and v1.1.6 both ship Iceman v4.23346, so flashing v1.1.6 over
+> v1.1.5 does not change the Proxmark client Phosphor depends on. Per
 > [lab-401/icopy-x](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6):
 >
-> 1. Ensure the device is on firmware 1.0.90
+> 1. Ensure the device's base firmware is 1.0.90
 > 2. Put the iCopy-X into **PC-Mode**
 > 3. Delete **all other** IPK files from the device
 > 4. Transfer the IPK, then close PC-Mode

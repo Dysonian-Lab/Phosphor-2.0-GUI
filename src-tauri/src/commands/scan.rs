@@ -40,7 +40,14 @@ pub async fn scan_card(
         if let Some((card_type, mut card_data)) = output_parser::parse_lf_search(output) {
             // T55xx carries its clonable payload in config blocks that `lf search`
             // does not print, so they have to be read explicitly.
-            if card_type == CardType::T55xx {
+            //
+            // This is also needed for an EM410x badge that additionally answers
+            // as a T55xx config block (very common on test cards). The card type
+            // stays EM4100 -- the UID is the real one -- but the blocks still
+            // need reading for the clone payload.
+            let has_t55xx_block = card_type == CardType::T55xx
+                || card_data.decoded.contains_key("t55xx_chipset");
+            if has_t55xx_block {
                 enrich_t55xx_data(&app, &port, &mut card_data).await;
             }
             return finish_scan(&machine, card_type, card_data);

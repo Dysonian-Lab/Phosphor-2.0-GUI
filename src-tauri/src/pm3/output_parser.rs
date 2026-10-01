@@ -427,18 +427,62 @@ static T5577_PASSWORD_FOUND_RE: LazyLock<Regex> = LazyLock::new(|| {
 pub fn parse_lf_search(output: &str) -> Option<(CardType, CardData)> {
     let clean = strip_ansi(output);
 
-    // Generic chipset detection. This MUST be checked before the "No known tags"
-    // guard below, because `lf search` prints in this order:
+    // A T55xx *config block* is not a card type -- plenty of ordinary EM410x
+    // badges also answer `lf search` with "[+] Chipset... T55xx" in the
+    // "special cases" section, alongside a perfectly good EM410x match:
     //
-    //   [-] No known 125/134 kHz tags found!
+    //   [+] EM 410x ID 4E008E7AC1
+    //   [+] Valid EM410x ID found!
     //   [+] Chipset... T55xx
-    //   [?] Hint: Try `lf t55xx` commands
     //
-    // The "No known tags" line only means no *pre-defined* card type matched.
-    // A T5577 reports as an unknown chipset, which is still a real detection --
-    // and the real T5577 user is usually there to work with exactly that chip.
-    if let Some(caps) = LF_CHIPSET_RE.captures(&clean) {
-        let chipset = caps[1].to_uppercase();
+    // An earlier revision tested for the chipset FIRST and returned
+    // `uid: String::new()` unconditionally, which silently swallowed the real
+    // card: the scan showed a blank UID and the write step then had an empty
+    // UID to verify against, so scan-then-write could never succeed.
+    //
+    // So the chipset is only a FALLBACK, evaluated after every standard card
+    // type has had its chance. A recognised card type with a real UID always
+    // wins; we still record that a T55xx block exists so the caller can read
+    // the config blocks off it.
+    let t55xx_chipset = LF_CHIPSET_RE
+        .captures(&clean)
+        .map(|caps| caps[1].to_uppercase());
+
+    // EM4100
+    if clean.contains("EM410x") || clean.contains("EM 410x") {
+        if let Some(caps) = EM4100_ID_RE.captures(&clean) {
+            let uid = caps[1].to_uppercase();
+            let mut decoded = HashMap::new();
+            decoded.insert("type".to_string(), "EM4100".to_string());
+            decoded.insert("id".to_string(), uid.clone());
+            // Flag the coexisting config block so the T55xx block reads still
+            // run. This does NOT change the card type: the EM410x match is the
+            // authoritative one, and the UID below is the real one.
+            if let Some(chipset) = t55xx_chipset {
+                decoded.insert("t55xx_chipset".to_string(), chipset);
+            }
+            return Some((
+                CardType::EM4100,
+                CardData {
+                    uid: uid.clone(),
+                    raw: uid,
+                    decoded,
+                },
+            ));
+        }
+    }
+
+    // No known tags AND no generic chipset -> genuinely nothing on the reader.
+    // Evaluated only after the standard types, so that an EM410x card which
+    // ALSO happens to print the T55xx line is not discarded here.
+    if clean.contains("No known 125/134 kHz tags found") && t55xx_chipset.is_none() {
+        return None;
+    }
+
+    // Fallback: no standard card type matched, but a T55xx responded. A real
+    // T5577 prints exactly this and has no EM410x layer, so treating it as a
+    // detection is what keeps a genuine T5577 from being reported as "no card".
+    if let Some(chipset) = t55xx_chipset {
         let mut decoded = HashMap::new();
         decoded.insert("type".to_string(), "T55xx".to_string());
         decoded.insert("chipset".to_string(), chipset.clone());
@@ -456,29 +500,6 @@ pub fn parse_lf_search(output: &str) -> Option<(CardType, CardData)> {
                 decoded,
             },
         ));
-    }
-
-    // No known tags AND no generic chipset -> genuinely nothing on the reader.
-    if clean.contains("No known 125/134 kHz tags found") {
-        return None;
-    }
-
-    // EM4100
-    if clean.contains("EM410x") || clean.contains("EM 410x") {
-        if let Some(caps) = EM4100_ID_RE.captures(&clean) {
-            let uid = caps[1].to_uppercase();
-            let mut decoded = HashMap::new();
-            decoded.insert("type".to_string(), "EM4100".to_string());
-            decoded.insert("id".to_string(), uid.clone());
-            return Some((
-                CardType::EM4100,
-                CardData {
-                    uid: uid.clone(),
-                    raw: uid,
-                    decoded,
-                },
-            ));
-        }
     }
 
     // HID Prox
@@ -2100,6 +2121,44 @@ mod tests {
     use crate::cards::types::CardType;
     use crate::pm3::command_builder::build_clone_command;
 
+    /// Parses a REAL capture from the user's card on COM19 (2026-10-01 15:23),
+    /// written to a file by the actual proxmark3 client. This is the ground
+    /// truth for the blank-UID report: the card scans as EM410x with a real
+    /// UID AND advertises a T55xx config block. The UID must survive.
+    #[test]
+    fn live_com19_card_keeps_its_uid() {
+        let path = r"C:\Users\Owner\AppData\Local\Temp\kilo\live_lfsearch.txt";
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            eprintln!("SKIP: no live capture at {}", path);
+            return;
+        };
+        assert!(
+            raw.contains("4E008E7AC1"),
+            "capture should contain the real UID"
+        );
+
+        let (card_type, data) =
+            parse_lf_search(&raw).expect("the live card must parse as a detection");
+        eprintln!("card_type = {:?}", card_type);
+        eprintln!("uid       = {}", data.uid);
+        eprintln!("decoded   = {:?}", data.decoded);
+
+        assert_eq!(card_type, CardType::EM4100);
+        assert_eq!(data.uid, "4E008E7AC1", "live card UID must not be blanked");
+        assert_eq!(
+            data.decoded.get("t55xx_chipset").map(|s| s.as_str()),
+            Some("T55XX")
+        );
+
+        // And the write command it produces must be the single-command clone,
+        // matching iCopy-X's PAR_CLONE_MAP for EM410x.
+        let cmd = build_clone_command(&card_type, &data.uid, &data.decoded)
+            .expect("EM410x is cloneable");
+        eprintln!("clone cmd = {}", cmd);
+        assert_eq!(cmd, "lf em 410x clone --id 4E008E7AC1");
+    }
+
+
     // -----------------------------------------------------------------------
     // Generic T55xx chipset reported by `lf search`
     // -----------------------------------------------------------------------
@@ -2195,6 +2254,61 @@ mod tests {
         let (_, data) = parse_lf_search(&output).unwrap();
         let cmd = build_clone_command(&CardType::EM4100, &data.uid, &data.decoded);
         assert_eq!(cmd.unwrap(), "lf em 410x clone --id 0F00112233");
+    }
+
+    /// Regression: an EM410x badge that also answers as a T55xx config block.
+    /// Verbatim from a user scan (logs/1344.md, 2026-10-01). The T55xx chipset
+    /// line used to win and return `uid: String::new()`, blanking the UID and
+    /// breaking the scan-then-write verify step. The EM410x match is
+    /// authoritative and must survive.
+    #[test]
+    fn em410x_with_t55xx_block_keeps_uid() {        let output = pm3_lf_search_output(
+            "[+] EM 410x ID 4E008E7AC1\n\
+             [+] EM410x ( RF/64 )\n\
+             [+] Unique TAG ID      : 7200715E83\n\
+             [=] \n\
+             [+] Valid EM410x ID found!\n\
+             \n\
+             [=] Searching for auth LF and special cases...\n\
+             [+] Chipset... T55xx\n\
+             [?] Hint: Try `lf t55xx` commands"
+        );
+        let (card_type, data) =
+            parse_lf_search(&output).expect("should parse the EM410x card");
+        assert_eq!(card_type, CardType::EM4100, "EM410x must win over T55xx block");
+        assert_eq!(data.uid, "4E008E7AC1", "real UID must not be blanked");
+        // The coexisting config block is still advertised so the caller reads it.
+        assert_eq!(
+            data.decoded.get("t55xx_chipset").map(|s| s.as_str()),
+            Some("T55XX")
+        );
+    }
+
+    /// A card that is ONLY a T55xx (no EM410x layer) must still be detected as
+    /// a T55xx rather than reported as "no card" -- this is what the original
+    /// chipset branch was for, and it must keep working as the fallback.
+    #[test]
+    fn pure_t55xx_still_detected_as_t55xx() {
+        let output = format!(
+            "[=] Checking for known tags...\n\
+             [-] No known 125/134 kHz tags found!\n\
+             \n\
+             [=] Searching for auth LF and special cases...\n\
+             [+] Chipset... T55xx\n\
+             [?] Hint: Try `lf t55xx` commands\n"
+        );
+        let (card_type, data) = parse_lf_search(&output).expect("pure T55xx is a detection");
+        assert_eq!(card_type, CardType::T55xx);
+        assert_eq!(data.decoded.get("chipset").unwrap(), "T55XX");
+        assert!(data.uid.is_empty(), "a bare T55xx has no UID");
+    }
+
+    /// Nothing on the reader at all: no standard type and no chipset -> None.
+    #[test]
+    fn empty_reader_is_none() {
+        let output = "[=] Checking for known tags...\n\
+             [-] No known 125/134 kHz tags found!\n";
+        assert!(parse_lf_search(&output).is_none());
     }
 
     // =======================================================================

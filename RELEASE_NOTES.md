@@ -2,11 +2,62 @@
 
 ## v2.2.0 — PM3 v4.23346 Alignment (September 2026)
 
-> **This build supersedes three earlier v2.2.0 uploads.** If you downloaded
+> **This build supersedes four earlier v2.2.0 uploads.** If you downloaded
 > any earlier v2.2.0 build, **please re-download** — the 28 Sep one could not
 > complete a scan, the 29 Sep one had no DESFire tools and a timeout bug on
-> T55xx dictionary checks, and the 30 Sep (earlier) one could not run any
-> Advanced Mifare panel after a scan.
+> T55xx dictionary checks, the 30 Sep (earlier) one could not run any
+> Advanced Mifare panel after a scan, and the build published earlier today
+> **showed a blank UID for EM410x cards that also carry a T55xx block**, which
+> broke scan-then-write.
+
+### Fixed: EM410x cards that also carry a T55xx block showed a BLANK UID
+
+**The most visible defect in this build.** Scanning an ordinary EM410x badge that
+happens to *also* answer as a T55xx config block displayed an **empty UID**, and
+because verification matches on UID, scan-then-write could never succeed.
+
+Cause: `lf search` prints both lines for these cards —
+
+```
+[+] EM 410x ID 4E008E7AC1
+[+] Valid EM410x ID found!
+[+] Chipset... T55xx          <-- also present, in the "special cases" section
+```
+
+…and the parser tested for the T55xx chipset line **first** and returned
+`uid: String::new()` unconditionally. The EM410x branch, which held the real
+UID, was never reached. A T55xx config block is not a card type — plenty of
+ordinary badges report one.
+
+Standard card types are now evaluated **first**; the T55xx chipset is a
+**fallback**, used only when nothing else matched. That fallback is retained so
+a genuine bare T5577 is still detected rather than reported as "no card". When
+the two coexist, the block is recorded so its config blocks are still read for
+the clone payload.
+
+Verified against a live capture from a real card (COM19, iCopy-X):
+
+```
+card_type = EM4100
+uid       = 4E008E7AC1
+clone cmd = lf em 410x clone --id 4E008E7AC1
+```
+
+### Fixed: T55xx config block was written FIRST instead of LAST
+
+Block 0 is the **modulation / bit-rate config word**. Writing it before the data
+blocks makes the chip re-modulate while those blocks are still incomplete, so
+the remaining writes land wrong.
+
+Order is now **data blocks 1..N ascending, config block 0 LAST**, matching the
+iCopy-X open-source middleware (`lfwrite.write_raw`): *"Data blocks 1..N are
+written FIRST, then config block 0 LAST. Block 0 sets modulation/bit-rate —
+writing it last avoids the tag re-modulating mid-sequence while data blocks are
+incomplete."*
+
+The previous regression test asserted the inverted order, so it passed while the
+defect was live; it has been replaced with three tests that check the real
+ordering.
 
 ### Fixed: every Advanced Mifare panel failed with "device not connected"
 
@@ -285,11 +336,15 @@ so on.
 - Firmware built with `make fullimage PLATFORM=PM3RDV4 [PLATFORM_EXTRAS=...]`.
 
 ### Verification
-- `cargo test --lib` — **342 passed, 0 failed** (338 prior + 4 new)
+- `cargo test --lib` — **354 passed, 0 failed** (342 prior + 12 new)
 - `npx tsc --noEmit` — clean
 - `npm run tauri build` — SUCCESS (NSIS installer + portable ZIP)
 - Device verified on v4.23346, **iCopy-X** (`hw version` reports
   `Iceman/master/v4.23346`, FPGA `fpga_icopyx_hf.ncd`)
+- Live scan of an EM410x+T55xx test card (COM19): UID `4E008E7AC1` preserved
+  through the parser, clone command `lf em 410x clone --id 4E008E7AC1`
+- All 8 config blocks read live: `0=00148040 1=FFA7A004 2=7AFA6078 3-7=0`,
+  and the generated write order confirmed block 0 last
 - `hf mf autopwn` verified live against a MIFARE Classic 1K: 31 keys recovered,
   exit 0, 7 seconds, dump + key files written
 
@@ -307,6 +362,9 @@ so on.
   `B444910108AD`) fails against real hardware with
   `Received packet frame with invalid CRC` and is never packaged.
   `build_portable.ps1` aborts rather than package an unverified client.
+  Note: the client must be launched from its own directory, or it fails to
+  start with `0xC0000139` (missing DLL entry point). Phosphor does this
+  correctly; it only matters when running `proxmark3.exe` by hand.
 - Source: commit `336a9ee`, tagged `v2.2.0`.
 
 ## v2.1.0 — iCopy-X ICS Decoder Support (August 2026)
