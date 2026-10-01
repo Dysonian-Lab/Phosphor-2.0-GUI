@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::cards::types::{BlankType, MagicGeneration, RecoveryAction};
 use crate::error::AppError;
+use crate::logging;
 use crate::pm3::{command_builder, connection, output_parser};
 use crate::state::{WizardAction, WizardMachine, WizardState};
 
@@ -35,8 +36,17 @@ pub async fn detect_blank(
         }
     };
 
-    // Detect based on expected blank type
-    match expected_blank {
+    // Detect based on expected blank type. The outcome is logged centrally here
+    // so every blank path is covered without instrumenting each variant: a
+    // report of "it says place the correct blank" is unanswerable without
+    // knowing which blank type was expected and what the reader actually said.
+    logging::section("BLANK DETECTION");
+    logging::line(&format!(
+        "Expected blank type : {:?}  (port {})",
+        expected_blank, port
+    ));
+
+    let result = match expected_blank {
         BlankType::T5577 => detect_t5577(&app, &port, &machine).await,
         BlankType::EM4305 => detect_em4305(&app, &port, &machine).await,
         BlankType::MagicMifareGen1a
@@ -48,7 +58,21 @@ pub async fn detect_blank(
         }
         BlankType::MagicUltralight => detect_magic_ultralight(&app, &port, &machine).await,
         BlankType::IClassBlank => detect_iclass_blank(&app, &port, &machine).await,
-    }
+    };
+
+    logging::line(&format!(
+        "Outcome             : {}",
+        match &result {
+            Ok(WizardState::BlankDetected { blank_type, ready_to_write, .. }) => format!(
+                "blank DETECTED as {:?} (ready_to_write={})",
+                blank_type, ready_to_write
+            ),
+            Ok(other) => format!("finished in state {:?}", other),
+            Err(e) => format!("FAILED: {}", e),
+        }
+    ));
+
+    result
 }
 
 /// Run `lf t55xx detect` to confirm a T5577 is present, then `lf search` to

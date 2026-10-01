@@ -2,6 +2,7 @@ mod cards;
 mod commands;
 mod db;
 mod error;
+mod logging;
 mod pm3;
 mod state;
 
@@ -75,32 +76,26 @@ pub fn run() {
             app.manage(Mutex::new(WizardMachine::new()));
             app.manage(FlashState::new());
             app.manage(HfOperationState::new());
-            // Write a startup marker to the debug log so we can confirm the
-            // logger is alive and the user can find the latest file.
-            let log_dir = std::path::PathBuf::from("D:\\kilocode\\Phosphor-debug\\Phosphor2.2GUI\\logs");
-            let _ = std::fs::create_dir_all(&log_dir);
-            let mut max = 0u32;
-            if let Ok(entries) = std::fs::read_dir(&log_dir) {
-                for entry in entries.flatten() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if let Ok(n) = name.trim_end_matches(".md").parse::<u32>() {
-                            max = max.max(n);
-                        }
-                    }
-                }
+            // Open the session diagnostic log and write the environment header.
+            //
+            // This replaces a startup marker that wrote to a HARDCODED developer
+            // path (`D:\kilocode\...\logs`). On any other machine that path was
+            // not creatable, so the marker was skipped silently and testers
+            // produced NO log at all -- the worst possible failure, since it is
+            // indistinguishable from "nothing went wrong". See `logging`.
+            if let Some(path) = logging::init() {
+                logging::line(&format!("Session log opened: {}", path.display()));
+                // Tell the terminal panel where the log is, so the path can be
+                // copied straight out of the UI.
+                logging::line(
+                    "When reporting a problem, send this whole file. It records \
+                     every command, its raw output, exit code and timing.",
+                );
             }
-            let path = log_dir.join(format!("{:03}.md", max + 1));
-            let mut f = match std::fs::File::create(&path) {
-                Ok(f) => f,
-                Err(_) => return Ok(()),
-            };
-use std::io::Write;
-            let _ = writeln!(f, "# Phosphor 2.2 GUI — Session Start\n");
-            let _ = writeln!(f, "Started at: {}", chrono::Local::now().to_rfc3339());
-            let _ = writeln!(f, "\n---\n");
             Ok(())
         })
 .invoke_handler(tauri::generate_handler![
+              logging::get_session_log_path,
               commands::wizard::get_wizard_state,
               commands::wizard::wizard_action,
               commands::device::detect_device,

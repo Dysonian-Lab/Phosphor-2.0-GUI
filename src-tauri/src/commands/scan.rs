@@ -3,6 +3,7 @@ use tauri::{AppHandle, State};
 
 use crate::cards::types::{CardType, RecoveryAction};
 use crate::error::AppError;
+use crate::logging;
 use crate::pm3::{command_builder, connection, output_parser};
 use crate::state::{WizardAction, WizardMachine, WizardState};
 
@@ -36,6 +37,22 @@ pub async fn scan_card(
     let lf_result =
         connection::run_search_command(&app, &port, command_builder::build_lf_search()).await;
 
+    // Record what the scan found (or failed to find) at the wizard level. The
+    // per-command raw output is already in the log; this line is what makes a
+    // report like "iCLASS autocopy stopped working" answerable, because it ties
+    // the commands to the outcome without needing the tester to explain it.
+    logging::operation(
+        "SCAN (LF)",
+        &format!("port={}", port),
+        &match &lf_result {
+            Ok(out) => match output_parser::parse_lf_search(out) {
+                Some((ct, data)) => format!("detected {:?} (uid={})", ct, data.uid),
+                None => "search returned output but no card type parsed".to_string(),
+            },
+            Err(e) => format!("LF search error: {}", e),
+        },
+    );
+
     if let Ok(ref output) = lf_result {
         if let Some((card_type, mut card_data)) = output_parser::parse_lf_search(output) {
             // T55xx carries its clonable payload in config blocks that `lf search`
@@ -57,6 +74,18 @@ pub async fn scan_card(
     // 2. LF found nothing → try HF search (13.56 MHz)
     let hf_result =
         connection::run_search_command(&app, &port, command_builder::build_hf_search()).await;
+
+    logging::operation(
+        "SCAN (HF)",
+        &format!("port={}", port),
+        &match &hf_result {
+            Ok(out) => match output_parser::parse_hf_search(out) {
+                Some((ct, _)) => format!("detected {:?}", ct),
+                None => "search returned output but no card type parsed".to_string(),
+            },
+            Err(e) => format!("HF search error: {}", e),
+        },
+    );
 
     match hf_result {
         Ok(output) => {

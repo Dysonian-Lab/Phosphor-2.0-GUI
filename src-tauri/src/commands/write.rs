@@ -3,6 +3,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::cards::types::{BlankType, CardType, RecoveryAction};
 use crate::error::AppError;
+use crate::logging;
 use crate::pm3::{command_builder, connection, output_parser};
 use crate::state::{WizardAction, WizardMachine, WizardState};
 
@@ -70,6 +71,22 @@ pub async fn write_clone_with_data(
     }
 
     let blank = blank_type.unwrap_or_else(|| card_type.recommended_blank());
+
+    // Record exactly what was asked to be written, where, and onto what. A
+    // report of "the write failed" is useless without the source type, target
+    // blank and UID that were in play.
+    logging::operation(
+        "WRITE CLONE",
+        &format!(
+            "port={} card_type={:?} uid={} target_blank={:?} decoded_fields={}",
+            port,
+            card_type,
+            uid,
+            blank,
+            decoded.len()
+        ),
+        "starting",
+    );
 
     // Guard: reject EM4305 blank for card types that don't support the --em flag.
     // Only the original 11 LF types support EM4305. The newer types (Presco, Nedap,
@@ -583,6 +600,43 @@ pub async fn verify_clone(
     } else {
         output_parser::verify_match(&source_uid, &verify_output)
     };
+
+    // Record the verdict AND what was compared against what. "Verification
+    // failed" with no record of the expected vs actual values is the hardest
+    // kind of report to act on.
+    logging::operation(
+        "VERIFY CLONE",
+        &format!(
+            "port={} card_type={:?} expected_uid={} method={}",
+            port,
+            source_card_type,
+            source_uid,
+            if source_decoded.is_some() {
+                "detailed field compare"
+            } else {
+                "uid compare"
+            }
+        ),
+        &format!(
+            "success={} mismatched={:?}",
+            success, mismatched
+        ),
+    );
+    if !success {
+        logging::line("Verification FAILED. Raw verification output follows:");
+        logging::log(&format!(
+            "--- verify raw output begin ---\n{}\n--- verify raw output end ---",
+            verify_output.trim_end()
+        ));
+        if let Some(ref decoded) = source_decoded {
+            logging::line("Expected (source) fields:");
+            let mut keys: Vec<&String> = decoded.keys().collect();
+            keys.sort();
+            for k in keys {
+                logging::line(&format!("  {} = {}", k, decoded[k]));
+            }
+        }
+    }
 
     let mut m = machine.lock().map_err(|e| {
         AppError::CommandFailed(format!("State lock poisoned: {}", e))

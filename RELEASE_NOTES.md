@@ -100,8 +100,48 @@ Verified against a real iCopy-X capture (COM19, Iceman v4.23346):
 [=]  Block0............ 00148040 (auto detect)
 ```
 
+### New: a real diagnostic log, and a `[LOG]` button to find it
+
+If something does not work, **one file now tells us what happened.** Click
+`[LOG]` in the status bar (bottom-right) to reveal the log file path — click
+again to copy it — then send that file. No need to describe your setup.
+
+Every run writes one session file next to `phosphor.exe` in a `logs` folder:
+
+```
+<wherever phosphor.exe is>\logs\phosphor-session-YYYYMMDD-HHMMSS.log
+```
+
+It records:
+
+- **The environment** — app version, OS, exe path, working directory, and the
+  bundled `proxmark3.exe` path with its size and timestamp (so a rebuilt,
+  unverified client is obvious).
+- **The device** — port, model, firmware string and `CAPABILITIES_VERSION`,
+  with an explicit warning if that version is not the required **11**. Client
+  and firmware must be flashed as a matched pair, and a mismatch is the most
+  common reason the same command behaves differently on two machines.
+- **Every command** — the exact command string, the port, how long it took in
+  milliseconds, the exit code, and the client's raw stdout/stderr **verbatim**.
+  Timeouts and spawn failures are recorded too, instead of producing nothing.
+- **Every operation and its outcome** — scan (LF and HF, with the card type and
+  UID that was parsed), blank detection (which blank type was expected and what
+  came back), write (source type, UID, target blank) and verification (what was
+  compared, what mismatched, and the expected field values on failure).
+
+> ⚠️ The log contains card UIDs and may contain keys recovered by dictionary
+> attacks. Send it to the developer, but don't post it publicly.
+
+**This replaces broken logging.** Previously the log was written to a hardcoded
+developer path (`D:\kilocode\Phosphor-debug\...`), so on any other machine it
+silently failed and **no log was produced at all** — indistinguishable from
+"nothing went wrong". Where it did work, it wrote **one separate file per chunk
+of output**, so a single clone attempt sprayed dozens of unrelated `001.md`,
+`002.md`, … files that gave no clue which command produced which. Both are
+fixed.
+
 ### Verification
-- `cargo test --lib` — **363 passed, 0 failed**
+- `cargo test --lib` — **368 passed, 0 failed**
 - `npx tsc --noEmit` — clean
 - 8 new regression tests covering the retry/back transitions and the T55xx
   detection spellings
@@ -110,11 +150,11 @@ Verified against a real iCopy-X capture (COM19, Iceman v4.23346):
 
 | Asset | Size | SHA-256 |
 |-------|------|---------|
-| `Phosphor_2.2.1_x64-setup.exe` | 65,737,064 | `6145a3db5f30371f0c1c03a389036b5037daf9d5050809bc3216108d7d200dc7` |
-| `Phosphor_2.2_GUI_v2.2.1_Windows_Portable.zip` | 111,447,164 | `bae94b3a57ddb432fed0931446a10823af8221a7c7ecedeab04e0f906b05559d` |
+| `Phosphor_2.2.1_x64-setup.exe` | 65,728,802 | `c7f1f50c31f82f9588caaf10b5ea7ee971ba3d0732ba63d0fa06c8b4e7289c37` |
+| `Phosphor_2.2_GUI_v2.2.1_Windows_Portable.zip` | 111,469,733 | `ffad1b489b5bf07e9ac7e480fb61b31e5d9f51576a704918188122231941bd25` |
 
 - `phosphor.exe` inside both artifacts reports FileVersion `2.2.1`,
-  SHA-256 `c153267b801c5cf1924c69465056188c57a4aa5eae5bb4049eba5a8220582fdc`
+  SHA-256 `5dd65e32d80e1642e456f64dc938df0a83a166b725264f95d1995bdd7935c311`
 - Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
   build, `CAPABILITIES_VERSION 11`, unchanged from v2.2.0. `build_portable.ps1`
   aborts rather than package an unverified client.
