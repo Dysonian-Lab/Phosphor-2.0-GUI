@@ -352,11 +352,11 @@ so on.
 
 | Asset | Size | SHA-256 |
 |-------|------|---------|
-| `Phosphor_2.2.0_x64-setup.exe` | 65,715,461 | `54f4273dd0f94e20f201c7dcd037c86473fde8e09bb4f5fcf05bff1b74be058d` |
-| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,446,885 | `ccac0790bbbeec88faac9bc35f4a32380de35830c4e6dcb864c9d5b8bf5c19d7` |
+| `Phosphor_2.2.0_x64-setup.exe` | 65,750,788 | `9fc5ecab2d4fdab40a4aacb32d773aac4b6331bc0f48414d9ca8f5171282e242` |
+| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,446,002 | `e543644224fbf20dba46fd869654b683ea34688c68247c17fa37247eee08f563` |
 
-- `phosphor.exe` inside both artifacts: 20,076,032 bytes,
-  SHA-256 `592be47a4826f8a4cbbabf70134e24021dd7d61a9db4e2f970417e6c4d040167`
+- `phosphor.exe` inside both artifacts: 20,054,528 bytes,
+  SHA-256 `b519e33be79499328e5364c554afed15a94f42936382150ddf52fc470edaf7d9`
 - Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
   build, `CAPABILITIES_VERSION 11`. A locally rebuilt client (prefix
   `B444910108AD`) fails against real hardware with
@@ -365,7 +365,7 @@ so on.
   Note: the client must be launched from its own directory, or it fails to
   start with `0xC0000139` (missing DLL entry point). Phosphor does this
   correctly; it only matters when running `proxmark3.exe` by hand.
-- Source: commit `336a9ee`, tagged `v2.2.0`.
+- Source: commit `12db82f`, tagged `v2.2.0`.
 
 ## v2.1.0 — iCopy-X ICS Decoder Support (August 2026)
 - PM3 client rebuilt with iCopy-X patches.
