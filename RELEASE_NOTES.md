@@ -22,6 +22,10 @@ that already worked.
 
 ### Fixed: a missing card was reported as a blank success
 
+> **Note:** the first attempt at this fix, included in the 30 Sep (earlier)
+> build, **did not work**. It is described here because the root cause is
+> non-obvious and worth recording.
+
 Proxmark3 signals "nothing found" inconsistently. `hf search` exits non-zero,
 but `hf 14a info`, `hf mf info` and `hf mfu info` **exit 0 having printed
 nothing but the connection banner**. Those reached the interface as an empty,
@@ -37,6 +41,25 @@ No tag detected running: hf mf info. Place the card on the reader and try again.
 Device-level commands such as `hw version` are deliberately excluded, because
 some of them legitimately print nothing.
 
+The earlier build failed for two independent reasons:
+
+1. **It was never called in a released app.** The check lived in one code path,
+   but Phosphor resolves the bundled `proxmark3.exe` from its own folder first,
+   so nearly every command arrived via a *different* path that skipped the check
+   entirely. All spawn paths now share one result interpreter, so this class of
+   bug cannot recur.
+2. **The banner test could not match real output.** Phosphor always passes `-f`
+   to PM3, which makes the client print an extra
+   `[=] Output will be flushed after every print.` line on every invocation.
+   The banner matcher did not know about that line, so it always returned false.
+   Its unit test had passed because the test used a hand-written banner that
+   the client never actually emits — the fixture has been replaced with a real
+   captured one.
+
+Verified on hardware: **Advanced → Read ISO14443-B Tag** with no card now
+reports *"No tag detected running: hf 14b info. Place the card on the reader and
+try again."*
+
 ### Fixed: "no device" was reported as "proxmark3 is not installed"
 
 When no Proxmark3 answered the probe, the app said *"Proxmark3 binary not
@@ -45,6 +68,50 @@ wrong when the client is bundled next to `phosphor.exe`. It matched on
 substrings of the error text, and the "no device answered" message contains the
 words "not found". It now distinguishes the two cases and, for devices with a
 PC mode such as the iCopy-X, tells you to switch to PC mode first.
+
+### Fixed: concurrent commands could collide on the serial port
+
+Only one `proxmark3.exe` can hold a COM port at a time. Phosphor's state lock
+guarded the port *string*, not the subprocess, so two overlapping commands could
+launch two clients against one port and produce *"invalid serial port"*. Spawns
+are now serialised process-wide.
+
+### Fixed: a timeout silently started a second client on the same port
+
+If the bundled client timed out, the app treated that as "client not found" and
+fell through to launch the same command again against the next candidate
+binary — on the same port, while the first client still held it. Timeouts are
+now reported instead of retried.
+
+### Fixed: MIFARE autopwn was killed after 30 seconds from the panel
+
+The dictionary-attack timeout list did not include `hf mf autopwn`, so the MF
+View panel gave it the default 30-second budget while the clone panel gave the
+same command an hour. The panel version was guaranteed to be killed
+mid-attack. `hf mf autopwn` and `lf iclass brute` are now routed to the long
+timeout.
+
+### Fixed: Proxmark3 error messages were sometimes misleading
+
+Exit codes were mapped to messages that contradicted PM3's own definitions — a
+real timeout was reported as *"Invalid argument"*, which blamed you for a bad
+command. All codes are now transcribed from PM3's `pm3_cmd.h`. In particular,
+`-5` is PM3's generic *"found nothing"* result, not "aborted by the device", so
+Read ISO14443-B Tag now correctly says **no tag**.
+
+Errors written to stderr are also surfaced. PM3 sends every `[!!]` line to
+stderr, so a command that failed with no stdout at all used to look like a
+blank success.
+
+### Verified on hardware: iCopy-X
+
+Tested against a physical **iCopy-X** running the lab-401 **icopy-x v1.1.6**
+firmware, on COM19 over USB CDC.
+
+> ⚠️ Flashing an iCopy-X is not done from Phosphor — the bundled images do not
+> include PM3ICOPYX firmware and Phosphor does not detect iCopy-X. Use the
+> official method:
+> [lab-401/icopy-x releases — v1.1.6](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6)
 
 ### New: DESFire Advanced panel (full `hf mfdes`)
 

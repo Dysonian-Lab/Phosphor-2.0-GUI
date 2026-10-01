@@ -35,27 +35,34 @@ pub fn emit_output(app: &AppHandle, text: &str, is_error: bool) {
             },
         );
     }
-    // Also append to the debug log file so the developer can inspect it
+// Also append to the debug log file so the developer can inspect it
     // after the fact without needing to watch the live terminal.
-    let log_dir = std::path::PathBuf::from("D:\\kilocode\\Phosphor-debug\\Phosphor2.2GUI\\logs");
-    let _ = std::fs::create_dir_all(&log_dir);
-    // Find next available log number
-    let mut max = 0u32;
-    if let Ok(entries) = std::fs::read_dir(&log_dir) {
-        for entry in entries.flatten() {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Ok(n) = name.trim_end_matches(".md").parse::<u32>() {
-                    max = max.max(n);
-                }
-            }
-        }
+    //
+    // This was previously implemented by scanning the log directory for the
+    // highest existing number on EVERY call. `read_stream_with_timeout` calls
+    // this once per output chunk, so a long attack was O(n^2) in directory
+    // entries and did blocking `std::fs` work on the async runtime. A counter
+    // in an atomic makes it O(1).
+    //
+    // The location is overridable with PHOSPHOR_PM3_LOG_DIR; the default is a
+    // developer path and only resolves on the build machine. These files
+    // contain card UIDs and recovered keys, so they must never be shipped or
+    // synced with the release bundle.
+    static NEXT_LOG_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let log_dir = std::env::var("PHOSPHOR_PM3_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from("D:\\kilocode\\Phosphor-debug\\Phosphor2.2GUI\\logs")
+        });
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        return;
     }
-    let path = log_dir.join(format!("{:03}.md", max + 1));
-    let mut f = match std::fs::File::create(&path) {
-        Ok(f) => f,
-        Err(_) => return,
+    let id = NEXT_LOG_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = log_dir.join(format!("{:03}.md", id));
+    let Ok(mut f) = std::fs::File::create(&path) else {
+        return;
     };
-    let _ = writeln!(f, "# Test Log #{:03}\n", max + 1);
+    let _ = writeln!(f, "# Test Log #{:03}\n", id);
     let _ = writeln!(f, "## PM3 Output\n");
     let _ = writeln!(f, "```\n{}\n```\n", text);
     let _ = writeln!(f, "---\n");
@@ -64,6 +71,34 @@ pub fn emit_output(app: &AppHandle, text: &str, is_error: bool) {
 
 /// Maximum time to wait for a PM3 subprocess to complete (30 seconds).
 const PM3_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Serialises every PM3 subprocess spawn.
+///
+/// Only one `proxmark3.exe` may hold a COM port at a time; a second process
+/// fails to open it and reports "invalid serial port". The `WizardMachine`
+/// mutex does NOT cover this: it guards the finite-state machine's port string
+/// and is released *before* the subprocess spawns, so two overlapping Tauri
+/// invocations used to race straight into two simultaneous spawns. The
+/// `raw` command module exposes arbitrary PM3 commands to the webview, which
+/// makes this reachable deliberately, not just by accident.
+///
+/// The guard is taken in `execute_pm3` and `probe_port` only -- those are the
+/// outermost spawn entry points. Taking it in `run_binary_direct` as well
+/// would deadlock, since `try_sidecar_silent` calls it from inside
+/// `execute_pm3`.
+static PM3_PORT_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// Acquire the serialisation guard, bounded so a stuck probe sweep cannot block
+/// the UI indefinitely.
+async fn acquire_port_lock(wait: Duration) -> Result<tokio::sync::MutexGuard<'static, ()>, AppError> {
+    match timeout(wait, PM3_PORT_LOCK.lock()).await {
+        Ok(guard) => Ok(guard),
+        Err(_) => Err(AppError::CommandFailed(
+            "Another PM3 operation is still running. Wait for it to finish, then try again.".into(),
+        )),
+    }
+}
 
 /// Timeout for the LF/HF scan sweeps.
 ///
@@ -174,17 +209,28 @@ async fn execute_pm3(
             "Invalid characters in command".into(),
         ));
     }
-    if port.contains(';') || port.contains('\n') || port.contains('\r') {
+if port.contains(';') || port.contains('\n') || port.contains('\r') {
         return Err(AppError::CommandFailed(
             "Invalid characters in command".into(),
         ));
     }
 
+    // One PM3 process at a time per machine. Held for the whole spawn so a
+    // concurrent invocation cannot open the same COM port.
+    let _port_guard = acquire_port_lock(wait).await?;
+
     // 1) Try bundled sidecar binary first (available in production builds).
     //    In dev mode the sidecar won't exist, so this silently falls through.
     match try_sidecar_silent(app, port, cmd, wait).await {
         Ok(output) => return Ok(output),
-        Err(_) => { /* sidecar not available -- fall through to PATH/scope lookup */ }
+        // A timeout means a client DID start and had the serial port open.
+        // Falling through on that error would immediately launch a second
+        // proxmark3 against the same port, which is precisely how the
+        // "invalid serial port" cascade began. Propagate it instead.
+        Err(e @ AppError::Timeout(_)) => return Err(e),
+        // Anything else means we never got a binary running, so trying the next
+        // candidate location is safe.
+        Err(_) => { /* binary not available here -- fall through to PATH/scope lookup */ }
     }
 
     // 2) Fall back to PATH-based lookup, then common install locations.
@@ -224,59 +270,13 @@ async fn execute_pm3(
             Ok(Ok(output)) => output,
         };
 
-        // Binary was found and executed -- process the result immediately.
+// Binary was found and executed -- process the result immediately.
         // No further fallback attempts needed regardless of exit code.
         let code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        return match code {
-            0 => {
-                let cleaned = strip_ansi(&stdout);
-                // PM3 reports a command it does not recognise with exit code 0 and
-                // prints either an argparse error or the whole help menu for the
-                // command group. Treating that as success is what let
-                // `lf t55xx set config` and `hf mf ejectblk` ship unnoticed: the
-                // app rendered the help text as though it were a result.
-                if let Some(reason) = rejected_command(&cleaned) {
-                    return Err(AppError::CommandFailed(format!(
-                        "PM3 rejected the command ({})",
-                        reason
-                    )));
-                }
-                if let Some(reason) = device_failure(&cleaned) {
-                    return Err(AppError::CommandFailed(reason));
-                }
-                // PM3 signals "nothing found" inconsistently. `hf search`
-                // exits -10, but `hf 14a info`, `hf mf info` and `hf mfu info`
-                // exit 0 having printed only the connection banner. Those
-                // reached the UI as a blank, success-looking result, which is
-                // indistinguishable from the app being broken -- it made a
-                // card sitting outside the coil look like a dead reader.
-                if is_card_dependent(cmd) && is_banner_only(&cleaned) {
-                    return Err(AppError::CommandFailed(format!(
-                        "No tag detected running: {}. Place the card on the reader and try again.",
-                        cmd
-                    )));
-                }
-                Ok(cleaned)
-            }
-            -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
-            _ => {
-                // PM3 exits non-zero for "found something but could not classify
-                // it" as well as for "found nothing". `lf search` on an
-                // unconfigured T5577 prints "[+] Chipset... T55xx" and then exits
-                // -10, so discarding stdout here loses a real detection. Only the
-                // search callers opt in -- see the `tolerate_nonzero` docs above.
-                let cleaned = strip_ansi(&stdout);
-                if let Some(reason) = device_failure(&cleaned) {
-                    return Err(AppError::CommandFailed(reason));
-                }
-                if tolerate_nonzero && !cleaned.trim().is_empty() {
-                    return Ok(cleaned);
-                }
-                Err(AppError::CommandFailed(friendly_exit_code(code, cmd)))
-            }
-        };
+        return interpret_pm3_result(cmd, code, &stdout, &stderr, tolerate_nonzero);
     }
 
     // All scope names exhausted -- return the first spawn error (from PATH lookup)
@@ -287,15 +287,22 @@ async fn execute_pm3(
 }
 
 /// Map PM3 exit codes to friendly messages.
-/// PM3 uses negative codes for specific conditions — -2 is the most common
-/// "no tag found" code across all tag types.
+///
+/// Every arm below is transcribed from the `#define PM3_E*` block in
+/// `include/pm3_cmd.h` (v4.23346) rather than from guesswork. An earlier
+/// version of this table mislabelled five codes, which was actively harmful:
+/// `-4` is `PM3_ETIMEOUT` but was reported as "Invalid argument", so a genuine
+/// timeout told the user their command was malformed.
+///
+/// Note `-10` is `PM3_ESOFT` and is the code `hf search` actually returns
+/// when nothing is on the reader; it gets bespoke handling below.
 fn friendly_exit_code(code: i32, cmd: &str) -> String {
     match code {
-        -2 => format!("No tag found running: {}", cmd),
-        -3 => format!("Unknown option running: {}", cmd),
-        -4 => format!("Invalid argument running: {}", cmd),
-        -5 => format!("PM3 timed out running: {}", cmd),
-        -7 => format!("No tag found running: {}", cmd),
+        -2 => format!("Invalid argument to the command: {}. Check the syntax.", cmd),
+        -3 => format!("Command not supported by this device: {}", cmd),
+        -4 => format!("Timed out waiting for the card while running: {}", cmd),
+        -5 => format!("PM3 aborted the operation before completing while running: {}. The tag did not respond.", cmd),
+        -7 => format!("RF transmission error while running: {}. Move the card closer to the antenna.", cmd),
         -10 => {
             // PM3 returns -10 ("Failed to identify tagtype") for a range of
             // conditions. For dump/emulate commands it usually means no key
@@ -316,10 +323,18 @@ fn friendly_exit_code(code: i32, cmd: &str) -> String {
         -1 => format!("Undefined error running: {}", cmd),
         -6 => format!("Command not implemented in this client running: {}", cmd),
         -8 => format!("Communication error with the device running: {}", cmd),
+        -9 => format!("Internal data flow error running: {}", cmd),
         -11 => format!("Flash error running: {}", cmd),
+        -12 => format!("Out of memory running: {}", cmd),
         -13 => format!("File error (missing or unreadable) running: {}", cmd),
+        // ENOTTY is the code behind the "invalid serial port" cascade the user
+        // hit repeatedly, so it gets a diagnostic rather than a shrug.
+        -14 => format!("Serial port problem while running: {}. The port may be held by another process.", cmd),
+        -15 => format!("Client initialisation failed while running: {}", cmd),
         -16 => format!("Wrong answer from the card running: {}", cmd),
+        -17 => format!("Out of bounds error running: {}", cmd),
         -18 => format!("Card exchange error running: {}", cmd),
+        -19 => format!("Failed to encode the APDU while running: {}", cmd),
         -20 => format!("APDU exchange failed running: {}. Is a card of the expected type on the reader?", cmd),
         -21 => format!("PM3 command failed running: {}", cmd),
         -22 => format!("Partial result only running: {}", cmd),
@@ -333,6 +348,8 @@ fn friendly_exit_code(code: i32, cmd: &str) -> String {
         -30 => format!("No such file running: {}", cmd),
         -98 => format!("No data available running: {}", cmd),
         -99 => format!("Fatal error running: {}", cmd),
+        -100 => format!("PM3 exited (PM3_SQUIT) while running: {}", cmd),
+        -128 => format!("PM3 reserved error running: {}", cmd),
         _ => format!("Exit code {}: {}", code, cmd),
     }
 }
@@ -343,31 +360,54 @@ fn friendly_exit_code(code: i32, cmd: &str) -> String {
 /// Deliberately limited to the `hf` and `lf` command groups. Device-level
 /// commands such as `hw version` are excluded because a silent success is
 /// normal for some of them, and turning that into an error would be wrong.
+///
+/// The exclusion list matters as much as the inclusion rule. Several `hf`/`lf`
+/// subcommands are host-side or emulator-memory operations that never touch
+/// the antenna, so their quiet output is a normal result and must not be
+/// reinterpreted as "no tag". `hf mf eclr` legitimately prints nothing at all.
 fn is_card_dependent(cmd: &str) -> bool {
     let c = cmd.trim_start();
-    c.starts_with("hf ") || c.starts_with("lf ") || c == "hf" || c == "lf"
+    if !(c.starts_with("hf ") || c.starts_with("lf ") || c == "hf" || c == "lf") {
+        return false;
+    }
+    // Emulator-memory and configuration commands: these talk to the client or
+    // to the emulator's RAM, not to a card. Plain prefix matching is used here
+    // because every member of each family is meant to be excluded -- a
+    // space-boundary check would let `hf mf eclr` through, since "e" is a
+    // subcommand prefix rather than a complete word.
+    const NOT_CARD_DEPENDENT: &[&str] = &[
+        "hf mf e",   // hf mf e* -- emulator memory: eclr/eload/esave/egetblk/...
+        "hf mf gen", // hf mf gen -- generate a UID, purely host-side
+        "lf t55xx config",
+        "lf t55xx set",
+    ];
+    !NOT_CARD_DEPENDENT
+        .iter()
+        .any(|bad| c.starts_with(bad))
 }
 
-/// True when PM3's output is nothing but the per-invocation connection banner.
+/// True when PM3's stdout is nothing but the per-invocation connection banner.
 ///
-/// Verbatim output of `hf mf info` with no card on the reader, exit code 0:
-/// ```text
-/// [=] Session log .../log_20260930155332.txt
-/// [+] loaded `.../preferences.json`
-/// [+] execute command from commandline: hf mf info
-/// [+] Using UART port COM19
-/// [+] Communicating with PM3 over USB-CDC
-/// [+] Max frame size: 624 bytes
-/// [+] Emulator memory: 8192 bytes
-/// [usb|script] pm3 --> hf mf info
-/// ```
-/// Nothing after that means no tag answered.
+/// This whitelist is transcribed from REAL captured output, not written from
+/// memory. The authoritative sample is
+/// `Phosphor2.2GUI\logs\1249.md`, captured from `hf 14a info` with no card on
+/// the reader (exit code 0).
+///
+/// The `-f` line matters and was missed once already. Phosphor always passes
+/// `-f` to PM3, which makes the client emit
+/// `PrintAndLogEx(INFO, "Output will be flushed after every print.\n")`
+/// (client/src/proxmark3.c) on every single invocation. A previous version of
+/// this function omitted that line, so it returned false against real output
+/// and the "no tag" feature never fired -- while its unit test still passed,
+/// because the test used a hand-written banner the client never emits. Any
+/// change here MUST be re-validated against a real capture.
 fn is_banner_only(output: &str) -> bool {
     output.lines().all(|line| {
         let clean = strip_ansi(line);
         let t = clean.trim();
         t.is_empty()
             || t.starts_with("[=] Session log")
+            || t.starts_with("[=] Output will be flushed")
             || t.starts_with("[+] loaded `")
             || t.starts_with("[+] execute command from commandline:")
             || t.starts_with("[+] Using UART port")
@@ -376,6 +416,122 @@ fn is_banner_only(output: &str) -> bool {
             || t.starts_with("[+] Emulator memory")
             || t.starts_with("[usb|script] pm3 -->")
     })
+}
+
+/// First failure diagnostic line in PM3 output, if any.
+///
+/// PM3 routes every `[!!]` line to **stderr** (client/src/ui.c), never stdout.
+/// Callers that read only stdout therefore see nothing at all when a command
+/// fails, which is how "an error occurred" used to render as a blank success.
+///
+/// `[!]` is `PrintAndLogEx(FAILED, ...)` and is accepted as a fallback because
+/// readers use it for the matching "nothing found" line -- `hf 14b info`
+/// prints `[!] no ISO 14443-B tag found` on the way out.
+fn pm3_error_line(output: &str) -> Option<String> {
+    output.lines().map(strip_ansi).find_map(|line| {
+        let t = line.trim();
+        ["[!!]", "[!]"]
+            .into_iter()
+            .find(|tag| t.starts_with(tag) && t.len() > tag.len())
+            .map(|tag| t[tag.len()..].trim().to_string())
+    })
+}
+
+/// Interpret a completed PM3 invocation.
+///
+/// This is the SINGLE source of truth for turning an exit code plus two output
+/// streams into a `Result`, and every spawn path must route through it:
+/// `execute_pm3`, `run_binary_direct` (both OS branches) and
+/// `try_sidecar_silent`.
+///
+/// That centralisation is not stylistic. `try_sidecar_silent` resolves the
+/// binary from the executable's own directory first, so in a released build
+/// nearly every command reaches `run_binary_direct` and never touches
+/// `execute_pm3`. When these checks lived only in `execute_pm3`, the
+/// "no tag detected" and help-menu checks silently never ran in the shipped
+/// app. Do not re-inline any of this at a call site.
+fn interpret_pm3_result(
+    cmd: &str,
+    code: i32,
+    stdout: &str,
+    stderr: &str,
+    tolerate_nonzero: bool,
+) -> Result<String, AppError> {
+    let cleaned_stdout = strip_ansi(stdout);
+    let cleaned_stderr = strip_ansi(stderr);
+
+    // What the user should see. PM3 puts results on stdout and diagnostics on
+    // stderr, so fall back to stderr rather than returning a blank success.
+    let visible = if cleaned_stdout.trim().is_empty() {
+        cleaned_stderr.clone()
+    } else {
+        cleaned_stdout.clone()
+    };
+
+    // PM3 reports an unrecognised command with exit code 0 and prints either an
+    // argparse error or the whole group help menu. Treating that as success is
+    // what let `lf t55xx set config` and `hf mf ejectblk` ship unnoticed: the
+    // app rendered help text as though it were a result.
+    if let Some(reason) = rejected_command(&visible) {
+        return Err(AppError::CommandFailed(format!(
+            "PM3 rejected the command ({})",
+            reason
+        )));
+    }
+    if let Some(reason) = device_failure(&visible) {
+        return Err(AppError::CommandFailed(reason));
+    }
+
+    if code == 0 {
+        // PM3 signals "nothing found" inconsistently. `hf search` exits -10,
+        // but `hf 14a info`, `hf mf info` and `hf mfu info` exit 0 having
+        // printed only the connection banner. Those reached the UI as a blank,
+        // success-looking result, which is indistinguishable from a broken
+        // reader -- it made a card sitting outside the coil look like dead
+        // hardware.
+        if is_card_dependent(cmd) && is_banner_only(&cleaned_stdout) {
+            // Prefer PM3's own explanation if it gave one on stderr.
+            if let Some(reason) = pm3_error_line(&cleaned_stderr) {
+                return Err(AppError::CommandFailed(reason));
+            }
+            return Err(AppError::CommandFailed(format!(
+                "No tag detected running: {}. Place the card on the reader and try again.",
+                cmd
+            )));
+        }
+        return Ok(visible);
+    }
+
+    // Non-zero from here on.
+    if let Some(reason) = device_failure(&visible) {
+        return Err(AppError::CommandFailed(reason));
+    }
+    // PM3 exits non-zero for "found something but could not classify it" as well
+    // as for "found nothing". `lf search` on an unconfigured T5577 prints
+    // "[+] Chipset... T55xx" and then exits -10, so discarding stdout here loses
+    // a real detection. Only the search callers opt in.
+    if tolerate_nonzero && !visible.trim().is_empty() {
+        return Ok(visible);
+    }
+    // -5 (PM3_EOPABORTED) is PM3's generic "found nothing" sentinel, not a
+    // report that anyone pressed a key. `hf 14b info` ends with
+    // `return (found) ? PM3_SUCCESS : PM3_EOPABORTED;` (client/src/cmdhf14b.c)
+    // and many other readers return the same thing, so surfacing the constant's
+    // own name as "Command aborted by the device" told the user nothing when
+    // they had simply forgotten to place a card.
+    if code == -5 && is_card_dependent(cmd) {
+        return Err(AppError::CommandFailed(format!(
+            "No tag detected running: {}. Place the card on the reader and try again.",
+            cmd
+        )));
+    }
+    if let Some(reason) = pm3_error_line(&cleaned_stderr) {
+        return Err(AppError::CommandFailed(with_detail(
+            friendly_exit_code(code, cmd),
+            &reason,
+        )));
+    }
+    Err(AppError::CommandFailed(friendly_exit_code(code, cmd)))
 }
 
 /// Run a single PM3 command: spawns `proxmark3 -p {port} -f -c "{cmd}"`,
@@ -430,10 +586,17 @@ fn is_long_running(cmd: &str) -> bool {
         "lf t55xx brute",
         "lf hid bruteforce",
         "lf em bruteforce",
+        "lf iclass brute",
         "hf 15 bruteforce",
         "hf 15 brute",
         "hf mf bruteforce",
         "hf mf brute",
+        // `hf mf autopwn` is a dictionary attack over the standard Mifare key
+        // set. It was missing here, so the Mifare View panel gave it only the
+        // 30s default and killed it mid-attack -- while `commands/hf_clone.rs`
+        // runs the SAME command with a 3600s budget. Two entry points, 120x
+        // apart, and the panel one was guaranteed to fail.
+        "hf mf autopwn",
         "hf mfu desbrute",
         "hf mfdes chk",
         "hf mfdes bruteaid",
@@ -881,6 +1044,11 @@ where
 pub async fn detect_device(app: &AppHandle) -> Result<(String, String, String), AppError> {
     let candidates = build_port_candidates();
 
+    // Probe sweeps spawn many short-lived clients, so they must exclude command
+    // execution for the duration -- otherwise a probe can collide with a real
+    // command on the same port.
+    let _port_guard = acquire_port_lock(Duration::from_secs(120)).await?;
+
     // Pick a random init message for personality
     let init_msgs = [
         "[=] Sniffing USB bus... come out, Proxmark",
@@ -1193,31 +1361,11 @@ async fn run_binary_direct(
             }
         };
 
-        let code = output.status.code().unwrap_or(-1);
+let code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        match code {
-            0 => {
-                let cleaned = strip_ansi(&stdout);
-                if let Some(reason) = device_failure(&cleaned) {
-                    return Err(AppError::CommandFailed(reason));
-                }
-                Ok(cleaned)
-            }
-            -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
-            _ => {
-                let detail = if stderr.is_empty() {
-                    strip_ansi(&stdout)
-                } else {
-                    strip_ansi(&stderr)
-                };
-                Err(AppError::CommandFailed(with_detail(
-                    friendly_exit_code(code, cmd),
-                    &detail,
-                )))
-            }
-        }
+        interpret_pm3_result(cmd, code, &stdout, &stderr, false)
     }
     
     #[cfg(not(target_os = "windows"))]
@@ -1246,28 +1394,11 @@ async fn run_binary_direct(
             }
         };
 
-        let code = output.status.code().unwrap_or(-1);
+let code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-        match code {
-            0 => {
-                let cleaned = strip_ansi(&stdout);
-                Ok(cleaned)
-            }
-            -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
-            _ => {
-                let detail = if stderr.is_empty() {
-                    strip_ansi(&stdout)
-                } else {
-                    strip_ansi(&stderr)
-                };
-                Err(AppError::CommandFailed(with_detail(
-                    friendly_exit_code(code, cmd),
-                    &detail,
-                )))
-            }
-        }
+        interpret_pm3_result(cmd, code, &stdout, &stderr, false)
     }
 }
 
@@ -1339,28 +1470,11 @@ let output = match timeout(wait, output_future).await {
         Ok(Ok(output)) => output,
     };
 
-        let code = output.status.code().unwrap_or(-1);
+let code = output.status.code().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    match code {
-        0 => {
-            let cleaned = strip_ansi(&stdout);
-            Ok(cleaned)
-        }
-        -5 | 251 => Err(AppError::Timeout(format!("PM3 timed out running: {}", cmd))),
-        _ => {
-            let detail = if stderr.is_empty() {
-                strip_ansi(&stdout)
-            } else {
-                strip_ansi(&stderr)
-            };
-            Err(AppError::CommandFailed(with_detail(
-                friendly_exit_code(code, cmd),
-                &detail,
-            )))
-        }
-    }
+    interpret_pm3_result(cmd, code, &stdout, &stderr, false)
 }
 
 fn parse_hw_version(output: &str) -> Option<(String, String)> {
@@ -1411,7 +1525,7 @@ fn extract_short_version(version_str: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_banner_only, is_card_dependent, rejected_command};
+    use super::{friendly_exit_code, interpret_pm3_result, is_banner_only, is_card_dependent, pm3_error_line, rejected_command};
 
     /// Verbatim PM3 output for `lf t55xx danger raw`. Exit code 0.
     #[test]
@@ -1444,16 +1558,29 @@ dump             Dump MIFARE Classic tag to binary file\n";
 
     // -- banner-only detection (empty output means "no tag") ----------------
 
-    /// Verbatim `hf mf info` output with no card on the reader. Exit code 0,
-    /// and nothing beyond the connection banner. Real capture, COM19.
-    const BANNER_ONLY: &str = "[=] Session log C:/tmp/.proxmark3/logs/log_20260930155332.txt\n\
-[+] execute command from commandline: hf mf info\n\
+    /// Verbatim output of `hf 14a info` with no card on the reader, exit code 0.
+    ///
+    /// Copied from the real capture at
+    /// `Phosphor2.2GUI\logs\1249.md` (COM19, 30 Sep 2026) -- every line
+    /// included, in order.
+    ///
+    /// An earlier version of this constant claimed to be a real capture but had
+    /// been hand-edited until it agreed with the implementation: it dropped the
+    /// `[=] Output will be flushed after every print.` line that `-f` always
+    /// produces. That is how `is_banner_only` shipped returning false against
+    /// real output while its own test passed. Do not "tidy" this constant --
+    /// re-copy it from a real log instead.
+    const BANNER_ONLY: &str = "[=] Session log D:/kilocode/Phosphor-debug/Phosphor2.2GUI/portable/.proxmark3/logs/log_20260930155228.txt\n\
+[=] Output will be flushed after every print.\n\
+\n\
+[+] loaded `D:/kilocode/Phosphor-debug/Phosphor2.2GUI/portable/.proxmark3/preferences.json`\n\
+[+] execute command from commandline: hf 14a info\n\
 \n\
 [+] Using UART port COM19\n\
 [+] Communicating with PM3 over USB-CDC\n\
 [+] Max frame size: 624 bytes\n\
 [+] Emulator memory: 8192 bytes\n\
-[usb|script] pm3 --> hf mf info\n";
+[usb|script] pm3 --> hf 14a info\n";
 
     #[test]
     fn banner_only_is_detected() {
@@ -1464,6 +1591,15 @@ dump             Dump MIFARE Classic tag to binary file\n";
     fn banner_only_tolerates_empty_output() {
         assert!(is_banner_only(""));
         assert!(is_banner_only("\n\n"));
+    }
+
+    /// Regression guard for the shipped bug: the `-f` flush line must be
+    /// tolerated, because Phosphor passes `-f` on every invocation.
+    #[test]
+    fn banner_only_tolerates_dash_f_flush_line() {
+        assert!(is_banner_only(
+            "[=] Output will be flushed after every print.\n[+] Using UART port COM19\n"
+        ));
     }
 
     /// A real result must not be mistaken for "no tag". Taken from
@@ -1486,6 +1622,109 @@ dump             Dump MIFARE Classic tag to binary file\n";
         assert!(!is_card_dependent("hw version"));
         assert!(!is_card_dependent("hw tune"));
         assert!(!is_card_dependent("data geto"));
+        // Emulator-memory and config subcommands never touch the antenna, so a
+        // quiet result must stay a success rather than becoming "no tag".
+        assert!(!is_card_dependent("hf mf eclr"));
+        assert!(!is_card_dependent("hf mf esave hf mf"));
+        assert!(!is_card_dependent("hf mf gen"));
+        assert!(!is_card_dependent("lf t55xx config"));
+        assert!(!is_card_dependent("lf t55xx set config"));
+        // ...but a genuine read of the same family is still card-dependent.
+        assert!(is_card_dependent("hf mf dump"));
+        assert!(is_card_dependent("hf mf autopwn"));
+    }
+
+    // -- shared result interpretation ---------------------------------------
+
+    /// The regression test for the bug that actually shipped: this banner plus
+    /// exit code 0 must produce an error, not a blank success. It runs through
+    /// `interpret_pm3_result` because that is now the only place the decision is
+    /// made, and it is the function the released `run_binary_direct` path calls.
+    #[test]
+    fn no_card_exit_zero_is_an_error() {
+        let err = interpret_pm3_result("hf 14a info", 0, BANNER_ONLY, "", false)
+            .expect_err("banner-only output must not be reported as success");
+        assert!(err.to_string().contains("No tag detected"), "got: {err}");
+    }
+
+    /// A genuine detection on the same code path must still succeed.
+    #[test]
+    fn card_detected_exit_zero_succeeds() {
+        let out = "[+]  UID: 0C CB F0 CF   ( ONUID, re-used )\n\
+[+] ATQA: 00 04\n\
+[+]  SAK: 08 [2]\n\
+[+]    MIFARE Classic 1K\n";
+        let got = interpret_pm3_result("hf 14a info", 0, out, "", false)
+            .expect("a real detection must succeed");
+        assert!(got.contains("MIFARE Classic 1K"));
+    }
+
+    /// PM3 writes `[!!]` diagnostics to stderr, never stdout. A command whose
+    /// only output is an error must surface that reason rather than a blank
+    /// success.
+    #[test]
+    fn stderr_diagnostic_is_surfaced() {
+        let got = interpret_pm3_result("hf mf dump", 0, "", "[!!] No keys found\n", false)
+            .expect_err("empty stdout with a [!!] diagnostic is a failure");
+        assert!(got.to_string().contains("No keys found"), "got: {got}");
+    }
+
+    /// Exit -10 is `PM3_ESOFT` and is what `hf search` returns with no card.
+    #[test]
+    fn negative_ten_is_mapped() {
+        let msg = friendly_exit_code(-10, "hf search");
+        assert!(msg.contains("No tag found"), "got: {msg}");
+        assert!(!msg.contains("Exit code"), "got: {msg}");
+    }
+
+    /// `hf 14b info` returns -5 when no card is found:
+/// `return (found) ? PM3_SUCCESS : PM3_EOPABORTED;` (client/src/cmdhf14b.c).
+/// The error is correct but the wording must say "no tag", not "aborted".
+    #[test]
+    fn eopaborted_reads_as_no_tag_for_card_commands() {
+        let err = interpret_pm3_result("hf 14b info", -5, "[!] no ISO 14443-B tag found\n", "", false)
+            .expect_err("no 14b tag is a failure");
+        assert!(err.to_string().contains("No tag detected"), "got: {err}");
+    }
+
+    /// PM3's own `[!]` FAILED line is surfaced. When both markers appear the
+    /// first line in output order wins, which is the one that explains the
+    /// failure at the point it happened.
+    #[test]
+    fn failed_marker_line_is_surfaced() {
+        let got = pm3_error_line("noise\n[!] no ISO 14443-B tag found\n");
+        assert_eq!(got.as_deref(), Some("no ISO 14443-B tag found"));
+        assert_eq!(pm3_error_line("[!!] hard failure\n"), Some("hard failure".into()));
+        assert_eq!(pm3_error_line("[+] all good\n"), None);
+        // A bare marker with no text is not a usable message.
+        assert_eq!(pm3_error_line("[!!]\n"), None);
+    }
+
+    /// -4 is PM3_ETIMEOUT. It used to be reported as "Invalid argument", which
+    /// told users their command was malformed when the card was the problem.
+    #[test]
+    fn timeout_code_is_not_blamed_on_the_user() {
+        let msg = friendly_exit_code(-4, "hf 14a info");
+        assert!(msg.contains("Timed out"), "got: {msg}");
+        assert!(!msg.contains("Invalid argument"), "got: {msg}");
+    }
+
+    /// -14 is PM3_ENOTTY, the code behind the "invalid serial port" cascade.
+    #[test]
+    fn serial_port_code_is_diagnosed() {
+        assert!(friendly_exit_code(-14, "hw version").contains("Serial port"));
+    }
+
+    /// `tolerate_nonzero` keeps `lf search` working: it prints a real chipset
+    /// line and then exits -10.
+    #[test]
+    fn tolerate_nonzero_preserves_search_results() {
+        let out = "[+] Chipset... T55xx\n[?] Hint: Try `lf t55xx` commands\n";
+        let got =
+            interpret_pm3_result("lf search", -10, out, "", true).expect("search result preserved");
+        assert!(got.contains("T55xx"));
+        // The same output without the opt-in is still an error.
+        assert!(interpret_pm3_result("lf search", -10, out, "", false).is_err());
     }
 
     /// Verbatim PM3 output for `lf t55xx set config`, which also printed the
@@ -1629,6 +1868,11 @@ dump             Dump MIFARE Classic tag to binary file\n";
             "hf mfu desbrute",
             "hf mfdes chk",
             "hf mfdes bruteaid",
+            // Regression: the Mifare View panel's autopwn was routed to the
+            // 30s default and killed mid-attack, while hf_clone.rs runs the
+            // same command with a 3600s budget.
+            "hf mf autopwn",
+            "hf mf autopwn -f default",
         ] {
             assert!(is_long_running(cmd), "{} should use the long timeout", cmd);
         }

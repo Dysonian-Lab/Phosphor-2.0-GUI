@@ -42,12 +42,24 @@ T5577 (LF), Gen1a, Gen2/CUID, Gen3, Gen4 GTU, Gen4 GDM/USCUID (HF)
 
 ## Requirements
 
-- **Proxmark3** device (Easy, RDV4, RDV4+BT, Generic, or compatible clone)
+- **Proxmark3** device (Easy, RDV4, RDV4+BT, Generic, iCopy-X, or compatible clone)
 - **Windows 10** or later (x64)
 - USB cable (data cable, not charge-only)
-- Compatible with the upgraded icopy-x hardware
 
 Proxmark3 firmware v4.23346+ recommended (tested with Iceman fork v4.23346). Phosphor bundles its own PM3 client binary, so you don't need a separate Proxmark3 installation.
+
+### iCopy-X
+
+Phosphor is **verified working with iCopy-X hardware running the lab-401
+[icopy-x v1.1.6](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6)
+firmware**, both as a client over USB CDC and for the full card-reading feature
+set. This was tested on a physical iCopy-X on COM19.
+
+> ⚠️ **Flashing an iCopy-X is not done from Phosphor.** The bundled firmware
+> images cover `rdv4`, `rdv4-bt`, `generic` and `generic-256` only; Phosphor
+> does not detect iCopy-X and falls back to the `generic` variant. To flash or
+> update an iCopy-X, follow the official method:
+> **[lab-401/icopy-x releases — v1.1.6](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6)**
 
 ## How to run on a clean Windows machine
 
@@ -96,7 +108,7 @@ Phosphor_2.2_GUI_v2.2.0_Windows_Portable/
 - **MIFARE Classic autopwn** with live progress (dictionary, nested, darkside, hardnested attacks)
 - **Magic card detection** identifies Gen1a through Gen4 GDM
 - **Blank card data check** warns if the blank already has data written to it
-- **Firmware flash** with variant picker (RDV4, RDV4+BT, Generic)
+- **Firmware flash** with variant picker (RDV4, RDV4+BT, Generic) — **not for iCopy-X**, see the warning above
 - **T5577 chip detection** and password-protected chip handling
 - **Advanced Tools tab** — 21 panels covering ISO 14443-B/15693, Felica, iCLASS, LEGIC, **DESFire**, MIFARE View, Calypso, ThinFilm, MAD, NFC, Ultralight, eMRTD, Smart Card, Antifuzz, T55xx, Trace, Lua scripting, firmware flashing, tuning and antenna tests
 - **Sound effects** and terminal-style UI
