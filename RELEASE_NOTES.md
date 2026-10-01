@@ -1,5 +1,46 @@
 # Phosphor 2.2 GUI - Release Notes
 
+---
+
+## READ FIRST — which build, and what firmware it needs
+
+**You are looking at v2.2.1.** If any screen, file property, installer name or
+download tells you anything else, you do not have v2.2.1. Verify it this way:
+
+| Where to look | Must show |
+|---|---|
+| Splash screen (title subtitle) | `v2.2.1 // PROXMARK3 INTERFACE` |
+| Splash screen (POST line) | `PHOSPHOR SYSTEMS v2.2.1` |
+| Top bar, top-left | `PHOSPHOR v2.2.1` |
+| `phosphor.exe` → Properties → Details | File/Product version `2.2.1` |
+| Installer file name | `Phosphor_2.2.1_x64-setup.exe` |
+
+**v2.2.1 will only work with one of these two device firmwares:**
+
+1. **iCopy-X running the FULL FLASH `icopy-x v1.1.6`** (the lab-401
+   `icopy-x-flash.ipk`), or
+2. **Any Proxmark3 running the FULL FLASH `Frosty Lemon` / Iceman
+   `v4.23346`**, `CAPABILITIES_VERSION 11`.
+
+Anything else — a stock Proxmark firmware, a partially flashed device, an
+iCopy-X left on its factory Proxmark build, or any `icopy-x` variant that is
+**not** the full-flash v1.1.6 — will misbehave, most visibly as blank/failed
+detection that is not a real detection fault.
+
+> ### ⚠️ Phosphor does NOT flash or update your device.
+> Firmware updating an iCopy-X is an **IPK update performed on the device
+> itself**, not a desktop firmware flash from Phosphor. Use
+> **`icopy-x-flash.ipk`**, which ships Iceman v4.23346
+> (`CAPABILITIES_VERSION 11`) to match the bundled client. Do **not** use
+> `icopy-x-noflash.ipk` — it leaves the factory Proxmark in place and will not
+> match. Steps: [lab-401/icopy-x v1.1.6](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6)
+>
+> Check your device with `hw version` in Phosphor's terminal, or:
+> `proxmark3.exe <COMx> -c "hw version"`. You must see `v4.23346` and
+> `CAPABILITIES_VERSION: 11`.
+
+---
+
 ## v2.2.1 — Retry & Navigation Fixes (October 2026)
 
 > Navigation and write-retry fixes on top of v2.2.0. All v2.2.0 scan, parse and
@@ -69,11 +110,11 @@ Verified against a real iCopy-X capture (COM19, Iceman v4.23346):
 
 | Asset | Size | SHA-256 |
 |-------|------|---------|
-| `Phosphor_2.2.1_x64-setup.exe` | 65,720,678 | `c2308fe1bdc05b5d79d75450dff680405881b75ec2c08a82e42a101ecf273913` |
-| `Phosphor_2.2_GUI_v2.2.1_Windows_Portable.zip` | 111,447,164 | `344755ca55baac22f8314ce5fe29b76c45f04d3234e580abdf2c4a7d4cfe7019` |
+| `Phosphor_2.2.1_x64-setup.exe` | 65,737,064 | `6145a3db5f30371f0c1c03a389036b5037daf9d5050809bc3216108d7d200dc7` |
+| `Phosphor_2.2_GUI_v2.2.1_Windows_Portable.zip` | 111,447,164 | `bae94b3a57ddb432fed0931446a10823af8221a7c7ecedeab04e0f906b05559d` |
 
 - `phosphor.exe` inside both artifacts reports FileVersion `2.2.1`,
-  SHA-256 `210082e288989fc9e4c9cf4ce81cffec6d31f7986a11f5f5631c0e09f187a958`
+  SHA-256 `c153267b801c5cf1924c69465056188c57a4aa5eae5bb4049eba5a8220582fdc`
 - Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
   build, `CAPABILITIES_VERSION 11`, unchanged from v2.2.0. `build_portable.ps1`
   aborts rather than package an unverified client.

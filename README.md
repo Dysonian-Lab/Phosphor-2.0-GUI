@@ -2,7 +2,27 @@
 
 Desktop GUI for Proxmark3. Scan, clone and manage RFID/NFC cards without touching the command line.
 
-![Windows](https://img.shields.io/badge/Windows-10%2B-blue) ![License](https://img.shields.io/badge/license-GPL--3.0-green) ![Version](https://img.shields.io/badge/version-2.2.0-brightgreen)
+![Windows](https://img.shields.io/badge/Windows-10%2B-blue) ![License](https://img.shields.io/badge/license-GPL--3.0-green) ![Version](https://img.shields.io/badge/version-2.2.1-brightgreen)
+
+> ### ⚠️ Requirements — read before using this build
+>
+> **v2.2.1 only works with one of these two device firmwares:**
+>
+> 1. **iCopy-X running the FULL FLASH `icopy-x v1.1.6`** (lab-401
+>    `icopy-x-flash.ipk`), or
+> 2. **Any Proxmark3 running the FULL FLASH `Frosty Lemon` / Iceman
+>    `v4.23346`**, `CAPABILITIES_VERSION 11`.
+>
+> Client and firmware must be flashed as a **matched pair**. A stock Proxmark
+> firmware, a partially flashed device, or an iCopy-X still on its factory
+> Proxmark build will misbehave — most visibly as blank/failed detection that
+> is not a real detection fault.
+>
+> Verify with `hw version`: you must see `v4.23346` and
+> `CAPABILITIES_VERSION: 11`.
+>
+> **Phosphor does not flash or update your device.** See
+> [iCopy-X firmware](#icopy-x) below.
 
 ## What it does
 
@@ -10,7 +30,15 @@ Phosphor wraps the Proxmark3 client into a visual wizard. You plug in your Proxm
 
 **LF (125 kHz)** cards are cloned in seconds. **HF (13.56 MHz)** cards like MIFARE Classic go through automatic key recovery (autopwn) with real-time progress, then write to a magic card.
 
-## What's new in 2.2.0
+## What's new in 2.2.1
+
+- **Retry a failed write in place** — RETRY now returns to the blank step and keeps your source card and device connection. It used to drop you back at Scan and discard the source card, so a failed write could never be retried without walking the whole wizard again.
+- **Failed verification is retryable** — previously a failed verify only offered RESET (discard everything) or DISCONNECT (unplug).
+- **New BACK button after a successful clone** — returns to the blank step while staying connected and keeping the source card loaded.
+- **Fixed: T5577 blank detection missed `T55x7`** — Iceman prints the chip with a lowercase `x`, which the detector never matched, so it fell back to matching surrounding label text. Any firmware formatting that label differently reported a blank as absent ("Place the correct blank" on a PM3 Easy).
+- **The version shown in the app is now read from `package.json`**, so the splash screen and top bar can no longer drift from the real build version.
+
+### What's new in 2.2.0
 
 - **Iceman fork v4.23346** — upgraded PM3 firmware base to the latest upstream
 - **CAPABILITIES_VERSION 11** — client and firmware must be flashed as a matched pair
@@ -93,7 +121,7 @@ Proxmark refuses to talk.
 
 ## How to run on a clean Windows machine
 
-1. Download `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` from [Releases](../../releases)
+1. Download `Phosphor_2.2_GUI_v2.2.1_Windows_Portable.zip` from [Releases](../../releases)
 2. Extract the `.zip` to any folder (e.g., `C:\Tools\Phosphor`)
 3. Plug in your Proxmark3 via USB
 4. Double-click `phosphor.exe` to launch
@@ -111,7 +139,7 @@ Phosphor uses Tauri with the OS WebView. Windows 10 May 2020 Update (1903+) ship
 ### Portable layout
 
 ```
-Phosphor_2.2_GUI_v2.2.0_Windows_Portable/
+Phosphor_2.2_GUI_v2.2.1_Windows_Portable/
 ├── phosphor.exe
 ├── proxmark3.exe
 ├── *.dll
@@ -126,7 +154,7 @@ Phosphor_2.2_GUI_v2.2.0_Windows_Portable/
 
 ## Installation (setup-based)
 
-1. Download `Phosphor_2.2.0_x64-setup.exe` from [Releases](../../releases)
+1. Download `Phosphor_2.2.1_x64-setup.exe` from [Releases](../../releases)
 2. Run the installer
 3. Plug in your Proxmark3
 4. Launch Phosphor

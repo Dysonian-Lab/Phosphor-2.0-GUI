@@ -1,4 +1,5 @@
 import { useSfx } from '../../hooks/useSfx';
+import { APP_VERSION } from '../../version';
 
 interface TopBarProps {
   connected: boolean;
@@ -25,7 +26,7 @@ export function TopBar({ connected, onDisconnect }: TopBarProps) {
       }}
     >
       <div style={{ color: 'var(--green-mid)', fontWeight: 600 }}>
-        PHOSPHOR v2.2.0
+        PHOSPHOR v{APP_VERSION}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <div
