@@ -202,6 +202,41 @@ impl WizardMachine {
         }
     }
 
+    /// The blank type to expect when returning to `WaitingForBlank` for a retry
+    /// or a Back navigation.
+    ///
+    /// `WaitingForBlank.expected_blank` is only a UI hint (which blank the user
+    /// should place on the reader); the actual blank is re-detected by the
+    /// `detectBlank` invoke on arrival. So this must never fail or panic.
+    ///
+    /// Preference order:
+    ///   1. A blank type carried in the state we are transitioning FROM, so a
+    ///      user who already had a blank detected keeps the same expectation.
+    ///   2. The recommended blank for the identified source card.
+    ///   3. `T5577`, the default LF target, as a last resort.
+    fn expected_blank(&self) -> BlankType {
+        match &self.current {
+            WizardState::WaitingForBlank { expected_blank } => expected_blank.clone(),
+            WizardState::BlankDetected { blank_type, .. } => blank_type.clone(),
+            _ => self
+                .card_type()
+                .map(|ct| ct.recommended_blank())
+                .unwrap_or(BlankType::T5577),
+        }
+    }
+
+    /// The card type recorded for the source card, if one is loaded.
+    ///
+    /// `CardIdentified` is the only state that carries the type directly; the
+    /// write/verify states do not repeat it, so this returns `None` there and the
+    /// caller falls back to a default.
+    fn card_type(&self) -> Option<CardType> {
+        match &self.current {
+            WizardState::CardIdentified { card_type, .. } => Some(card_type.clone()),
+            _ => None,
+        }
+    }
+
     pub fn transition(&mut self, action: WizardAction) -> Result<&WizardState, AppError> {
         // Reset is always valid from any state — full reset to idle
         if matches!(action, WizardAction::Reset) {
@@ -434,9 +469,41 @@ impl WizardMachine {
                 timestamp: chrono::Local::now().to_rfc3339(),
             },
 
-            // Error + Retry -> Idle (user can restart the flow)
+            // Error + Retry -> WaitingForBlank (retry without rescanning source).
+            //
+            // `WaitingForBlank` carries only `expected_blank`; the source card
+            // (`card_type` / `card_data`, including any T55xx config blocks) lives
+            // on the machine, not in the enum, so returning here preserves
+            // everything the next write needs. The previous target was `Idle`,
+            // which discarded the source card and forced a full rescan of the
+            // source tag before a retry could even be attempted -- the reported
+            // "a failed write never retries" behaviour.
             (WizardState::Error { recoverable: true, .. }, WizardAction::Retry) => {
-                WizardState::Idle
+                WizardState::WaitingForBlank {
+                    expected_blank: self.expected_blank(),
+                }
+            }
+
+            // VerificationComplete -> WaitingForBlank (retry a failed verification)
+            //
+            // Same reasoning as Error + Retry above. This path was previously
+            // absent entirely: there was no route out of a failed verification
+            // except RESET (wipe everything) or DISCONNECT (drop the device).
+            (WizardState::VerificationComplete { .. }, WizardAction::Retry) => {
+                WizardState::WaitingForBlank {
+                    expected_blank: self.expected_blank(),
+                }
+            }
+
+            // Complete -> WaitingForBlank (plain Back from the completion screen)
+            //
+            // Normal navigation: keep the device connected and the source card
+            // loaded so the user can clone again or back out. RESET / DISCONNECT
+            // remain available as the deliberate "start over" / "unplug" choices.
+            (WizardState::Complete { .. }, WizardAction::Retry) => {
+                WizardState::WaitingForBlank {
+                    expected_blank: self.expected_blank(),
+                }
             }
 
             // Complete -> Idle (start over)
@@ -514,5 +581,171 @@ impl WizardMachine {
 
         self.current = next;
         Ok(&self.current)
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    fn connected_machine(current: WizardState) -> WizardMachine {
+        WizardMachine {
+            current,
+            port: Some("COM19".to_string()),
+            model: Some("iCopy-X".to_string()),
+            firmware: Some("v4.23346".to_string()),
+        }
+    }
+
+    /// Regression: "a failed write never attempts to actually rewrite it, it
+    /// goes back to scan". `Error + Retry` used to target `Idle`, which discarded
+    /// the source card and the device, forcing a full rescan before a retry could
+    /// even be attempted. It must return to `WaitingForBlank`.
+    #[test]
+    fn error_retry_goes_to_waiting_for_blank_not_idle() {
+        let mut m = connected_machine(WizardState::Error {
+            message: "block 2 of 8 failed".to_string(),
+            user_message: "Write may have failed.".to_string(),
+            recoverable: true,
+            recovery_action: Some(RecoveryAction::Retry),
+        });
+
+        m.transition(WizardAction::Retry).expect("retry must be valid");
+
+        assert!(
+            matches!(m.current, WizardState::WaitingForBlank { .. }),
+            "retry must land on WaitingForBlank, got {:?}",
+            m.current
+        );
+        // The device stays connected -- that is the whole point of a retry.
+        assert_eq!(m.port.as_deref(), Some("COM19"));
+        assert!(!matches!(m.current, WizardState::Idle));
+    }
+
+    /// A failed verification previously had NO route out except RESET (wipe
+    /// everything) or DISCONNECT (drop the device). Retry must now work.
+    #[test]
+    fn failed_verification_can_retry() {
+        let mut m = connected_machine(WizardState::VerificationComplete {
+            success: false,
+            mismatched_blocks: vec![2],
+        });
+
+        m.transition(WizardAction::Retry).expect("retry must be valid");
+
+        assert!(
+            matches!(m.current, WizardState::WaitingForBlank { .. }),
+            "failed verification must be retryable, got {:?}",
+            m.current
+        );
+        assert_eq!(m.port.as_deref(), Some("COM19"));
+    }
+
+    /// Regression: after a successful clone the completion screen offered only
+    /// "clone another" or "disconnect". A plain Back must exist that keeps the
+    /// connection and returns to the blank step.
+    #[test]
+    fn complete_offers_back_without_disconnecting() {
+        let mut m = connected_machine(WizardState::Complete {
+            source: CardSummary {
+                card_type: "EM4100".to_string(),
+                display_name: "EM4100".to_string(),
+                uid: "4E008E7AC1".to_string(),
+            },
+            target: CardSummary {
+                card_type: "EM4100".to_string(),
+                display_name: "EM4100".to_string(),
+                uid: "4E008E7AC1".to_string(),
+            },
+            timestamp: "2026-10-01T10:00:00+00:00".to_string(),
+        });
+
+        m.transition(WizardAction::Retry).expect("back must be valid");
+
+        assert!(
+            matches!(m.current, WizardState::WaitingForBlank { .. }),
+            "Back must return to WaitingForBlank, got {:?}",
+            m.current
+        );
+        assert_eq!(
+            m.port.as_deref(),
+            Some("COM19"),
+            "Back must not drop the device connection"
+        );
+    }
+
+    /// Back must carry the blank type the user was working with, not invent one.
+    ///
+    /// From `BlankDetected` the Rust FSM routes Back via the existing
+    /// `ReDetectBlank` action (same destination, same blank-type preservation);
+    /// `Retry` is deliberately not made valid there because
+    /// `BlankDetected + Retry` has no meaning -- the blank is already detected.
+    #[test]
+    fn back_preserves_the_detected_blank_type() {
+        let mut m = connected_machine(WizardState::BlankDetected {
+            blank_type: BlankType::T5577,
+            ready_to_write: true,
+            existing_data_type: None,
+        });
+
+        m.transition(WizardAction::ReDetectBlank)
+            .expect("back must be valid from BlankDetected");
+
+        match m.current {
+            WizardState::WaitingForBlank { expected_blank } => {
+                assert_eq!(expected_blank, BlankType::T5577);
+            }
+            other => panic!("expected WaitingForBlank, got {:?}", other),
+        }
+    }
+
+    /// A non-recoverable error must NOT offer a retry -- `Retry` is guarded on
+    /// `recoverable`, so this must be rejected rather than silently navigating.
+    #[test]
+    fn non_recoverable_error_rejects_retry() {
+        let mut m = connected_machine(WizardState::Error {
+            message: "no clone command".to_string(),
+            user_message: "This card type cannot be cloned.".to_string(),
+            recoverable: false,
+            recovery_action: None,
+        });
+
+        assert!(
+            m.transition(WizardAction::Retry).is_err(),
+            "a non-recoverable error must not be retryable"
+        );
+    }
+
+    /// expected_blank() must never panic from any state it can be reached from.
+    #[test]
+    fn expected_blank_is_total() {
+        for st in [
+            WizardState::Idle,
+            WizardState::ScanningCard,
+            WizardState::WaitingForBlank {
+                expected_blank: BlankType::T5577,
+            },
+            WizardState::VerificationComplete {
+                success: true,
+                mismatched_blocks: vec![],
+            },
+            WizardState::Complete {
+                source: CardSummary {
+                    card_type: "EM4100".to_string(),
+                    display_name: "EM4100".to_string(),
+                    uid: "0".to_string(),
+                },
+                target: CardSummary {
+                    card_type: "EM4100".to_string(),
+                    display_name: "EM4100".to_string(),
+                    uid: "0".to_string(),
+                },
+                timestamp: "t".to_string(),
+            },
+        ] {
+            let m = connected_machine(st);
+            // Must not panic, for any input state.
+            let _ = m.expected_blank();
+        }
     }
 }

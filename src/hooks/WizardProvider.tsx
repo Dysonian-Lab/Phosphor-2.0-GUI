@@ -88,6 +88,10 @@ export interface UseWizardReturn {
   softReset: () => Promise<void>;
   /** Disconnect device and return to idle */
   disconnect: () => Promise<void>;
+  /** Retry a failed write in place, keeping the source card and connection */
+  retryWrite: () => Promise<void>;
+  /** Plain Back: previous step, keeping the device connection */
+  back: () => Promise<void>;
   /** Load a saved card into the wizard as if it was just scanned */
   loadSavedCard: (card: { frequency: string; cardType: string; uid: string; raw: string; decoded: Record<string, string>; cloneable: boolean; recommendedBlank: string }) => Promise<void>;
   /** Re-detect blank card after erase (BlankDetected -> WaitingForBlank) */
@@ -346,6 +350,47 @@ export function WizardProvider({ children }: { children: ReactNode }) {
     }
   }, [send, reset]);
 
+  /**
+   * Retry a failed write without discarding the source card.
+   *
+   * Uses the Rust `Retry` action, which now routes Error / VerificationComplete
+   * back to `WaitingForBlank` and keeps cardType/cardData (including T55xx config
+   * blocks). The previous "RETRY WRITE" button was wired to `softReset`, which
+   * clears the card fields and drops the user back at scan -- so a transient
+   * failure on a PM3 Easy could never be retried in place.
+   */
+  const retryWrite = useCallback(async () => {
+    try {
+      await invoke<WizardState>('wizard_action', {
+        action: { action: 'Retry' },
+      });
+      send({ type: 'RE_DETECT_BLANK' });
+    } catch (err) {
+      console.error('retryWrite: Rust Retry failed, resetting', err);
+      reset();
+    }
+  }, [send, reset]);
+
+  /**
+   * Plain Back from the completion or error screen: return to the blank step with
+   * the device still connected and the source card still loaded.
+   *
+   * Normal navigation, distinct from RESET (start over) and DISCONNECT (unplug).
+   * `Retry` is used as the Rust action because the Rust FSM has no dedicated
+   * Back-after-complete action; both now land on WaitingForBlank.
+   */
+  const back = useCallback(async () => {
+    try {
+      await invoke<WizardState>('wizard_action', {
+        action: { action: 'Retry' },
+      });
+      send({ type: 'BACK' });
+    } catch (err) {
+      console.error('back: Rust Retry failed, resetting', err);
+      reset();
+    }
+  }, [send, reset]);
+
   const startHfProcess = useCallback(() => {
     send({ type: 'START_HF_PROCESS' });
   }, [send]);
@@ -426,6 +471,8 @@ export function WizardProvider({ children }: { children: ReactNode }) {
       selectVariant,
       backToScan,
       softReset,
+      retryWrite,
+      back,
       disconnect,
       loadSavedCard,
       reDetectBlank,
@@ -460,7 +507,7 @@ export function WizardProvider({ children }: { children: ReactNode }) {
       // Callbacks
       detect, scan, skipToBlank, write, finish, reset,
       updateFirmware, skipFirmware, cancelFirmware, selectVariant,
-      backToScan, softReset, disconnect, loadSavedCard, reDetectBlank,
+      backToScan, softReset, retryWrite, back, disconnect, loadSavedCard, reDetectBlank,
       startHfProcess, cancelHf, send,
     ],
   );

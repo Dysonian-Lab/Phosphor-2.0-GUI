@@ -1,6 +1,6 @@
 [package]
 name = "phosphor"
-version = "2.2.0"
+version = "2.2.1"
 description = "Proxmark3 GUI for One-Click Fob Cloning"
 authors = ["nik shuv"]
 license = "GPL-3.0-only"

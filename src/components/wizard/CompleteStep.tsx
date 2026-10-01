@@ -5,12 +5,14 @@ import type { CardType, CardData } from '../../machines/types';
 interface CompleteStepProps {
   onReset: () => void;
   onDisconnect?: () => void;
+  /** Plain Back: return to the blank step, keeping the connection and source card. */
+  onBack?: () => void;
   cardType?: CardType | null;
   cardData?: CardData | null;
   timestamp?: string | null;
 }
 
-export function CompleteStep({ onReset, onDisconnect, cardType, cardData, timestamp }: CompleteStepProps) {
+export function CompleteStep({ onReset, onDisconnect, onBack, cardType, cardData, timestamp }: CompleteStepProps) {
   const sfx = useSfx();
 
   const displayType = cardType || 'Unknown';
@@ -66,6 +68,30 @@ export function CompleteStep({ onReset, onDisconnect, cardType, cardData, timest
           >
             CLONE ANOTHER
           </button>
+          {onBack && (
+            <button
+              onClick={() => { sfx.action(); onBack(); }}
+              style={{
+                background: 'var(--bg-void)',
+                color: 'var(--green-bright)',
+                border: '2px solid var(--green-bright)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '14px',
+                fontWeight: 600,
+                padding: '8px 24px',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                sfx.hover();
+                e.currentTarget.style.background = 'var(--green-ghost)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--bg-void)';
+              }}
+            >
+              BACK
+            </button>
+          )}
           {onDisconnect && (
             <span
               onClick={() => { sfx.action(); onDisconnect(); }}

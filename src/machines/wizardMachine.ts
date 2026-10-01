@@ -179,6 +179,7 @@ export type WizardEvent =
   | { type: 'FIRMWARE_FAILED'; message: string }
   | { type: 'CANCEL_FIRMWARE' }
   | { type: 'RETRY' }
+  | { type: 'BACK' }
   | { type: 'RESET' }
   | { type: 'BACK_TO_SCAN' }
   | { type: 'SOFT_RESET' }
@@ -872,8 +873,22 @@ export const wizardMachine = setup({
             completionTimestamp: () => new Date().toISOString(),
           }),
         },
-        // No WRITE transition: Rust FSM has no VerificationComplete → WaitingForBlank path.
-        // On failed verification, user must RESET and start over.
+        // Failed verification can be retried WITHOUT rescanning the source card.
+        // `RE_DETECT_BLANK` returns to `waitingForBlank`, which keeps every
+        // `cardType` / `cardData` / `decoded` field intact -- including the T55xx
+        // config blocks the write step needs -- and only clears the blank state so
+        // the user can reseat the target card. The previous behaviour routed RETRY
+        // through SOFT_RESET, which clears the card fields and forces a full
+        // rescan of the source, so a transient write failure on a PM3 Easy meant
+        // starting the whole wizard over.
+        RE_DETECT_BLANK: {
+          target: 'waitingForBlank',
+          actions: assign({
+            blankType: () => null,
+            readyToWrite: () => false,
+            blankExistingData: () => null,
+          }),
+        },
         RESET: { target: 'idle', actions: assign(() => initialContext) },
         DISCONNECT: { target: 'idle', actions: assign(() => initialContext) },
       },
@@ -882,6 +897,18 @@ export const wizardMachine = setup({
     complete: {
       on: {
         DETECT: { target: 'detectingDevice', actions: assign(() => initialContext) },
+        // Plain Back from the completion screen: return to the blank step with
+        // the device still connected and the source card still loaded. This is a
+        // normal navigation action, so the card fields are preserved. RESET /
+        // DISCONNECT below are the deliberate "start over" / "unplug" choices.
+        BACK: {
+          target: 'waitingForBlank',
+          actions: assign({
+            blankType: () => null,
+            readyToWrite: () => false,
+            blankExistingData: () => null,
+          }),
+        },
         SOFT_RESET: {
           target: 'deviceConnected',
           actions: assign(() => clearCardFields),
@@ -895,8 +922,17 @@ export const wizardMachine = setup({
       on: {
         RETRY: {
           guard: ({ context }) => context.errorRecoverable,
-          target: 'idle',
-          actions: assign(() => initialContext),
+          // A retryable failure must return the user to the step that failed,
+          // keeping the source card and the device connection. `idle` threw
+          // everything away and forced a full rescan; `waitingForBlank` re-runs
+          // blank detection while preserving cardType/cardData/decoded, so the
+          // write can be attempted again immediately.
+          target: 'waitingForBlank',
+          actions: assign({
+            blankType: () => null,
+            readyToWrite: () => false,
+            blankExistingData: () => null,
+          }),
         },
         SOFT_RESET: {
           target: 'deviceConnected',

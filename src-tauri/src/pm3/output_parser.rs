@@ -391,6 +391,28 @@ static T5577_CHIP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)Chip\s*(?:type)?\.+\s*(T55x7|T5555|T5577)").expect("bad t5577 chip regex")
 });
 
+/// Whether `lf t55xx detect` found a T55xx.
+///
+/// Requires an actual chip FAMILY string -- `T55x7`, `T55xx`, `T5577` or
+/// `T5555` -- optionally preceded by a `Chip type` / `Chipset` label. The chip
+/// string is required because a label can legitimately be printed with an empty
+/// value when no tag is present, and matching the label alone would report a
+/// blank as detected.
+///
+/// `T55x7` (lowercase `x`) is the spelling iceman actually prints; it was
+/// missing from the original detection list, so `detected` depended entirely on
+/// the literal `"Chip type"` label and any firmware build that formatted the
+/// label differently produced a false "no blank detected" -- reported on a
+/// PM3 Easy, where the message reads as a blank-type restriction.
+///
+/// iCopy-X matches the `Chip type` label for stability across builds
+/// (`_KW_CHIP_TYPE` in `lft55xx.py`); accepting the label OR a bare chip name
+/// covers both that case and builds that omit the label.
+static T5577_DETECTED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:Chip\s*(?:type|set)\s*\.+\s*)?\b(T55xx|T55x7|T5577|T5555)\b")
+        .expect("bad t5577 detected regex")
+});
+
 /// `lf search` reports an unconfigured T55xx as a generic chipset, which is a
 /// different line shape from `lf t55xx detect`:
 ///
@@ -1934,11 +1956,20 @@ pub fn parse_t55xx_write_result(output: &str) -> Result<String, String> {
 pub fn parse_t5577_detect(output: &str) -> T5577Status {
     let clean = strip_ansi(output);
 
-    // Check if detected at all
-    let detected = clean.contains("T55xx")
-        || clean.contains("T5577")
-        || clean.contains("T5555")
-        || clean.contains("Chip type");
+    // A T55xx is detected from the `lf t55xx detect` report. Two signals are
+    // accepted, because PM3 firmware builds format the report differently:
+    //
+    //   1. The `Chip type` LABEL. This is what the iCopy-X middleware matches on
+    //      (`_KW_CHIP_TYPE = 'Chip type'` in `lft55xx.py`) because the label text
+    //      is stable across firmware builds even when the chip string is not.
+    //   2. A `T55xx`-family chip string.
+    //
+    // Signal 2 MUST include `T55x7` -- the lowercase-x spelling is what iceman
+    // actually prints (`[=]  Chip type......... T55x7`, verified on an iCopy-X
+    // running v4.23346). Matching only `T55xx`/`T5577`/`T5555` missed it, and a
+    // build that changes the surrounding label would then report "no blank
+    // detected" while a blank sat on the reader.
+    let detected = T5577_DETECTED_RE.is_match(&clean);
 
     let chip_type = T5577_CHIP_RE
         .captures(&clean)
@@ -4431,4 +4462,51 @@ mod tests {
         let out = "[+] Successfully written to block 3\n";
         assert!(parse_t55xx_write_result(out).is_ok());
         assert!(parse_t55xx_write_result("[+] Page 0\n").is_ok());
+    }
+
+    /// Verbatim `lf t55xx detect` output from a real iCopy-X (COM19, Iceman
+    /// v4.23346, 2026-10-01). Note the chip is spelled `T55x7` -- lowercase `x`.
+    ///
+    /// The `detected` boolean only matched `T55xx`/`T5577`/`T5555`, so it fell
+    /// through to the literal `"Chip type"` label check. That is fragile: any
+    /// firmware build that formats the label differently made the app report
+    /// "place the correct blank" while a blank was on the reader (reported on a
+    /// PM3 Easy). iCopy-X matches the `Chip type` label for exactly this reason
+    /// (`_KW_CHIP_TYPE = 'Chip type'`, stable across builds).
+    #[test]
+    fn parse_t5577_detect_real_t55x7_spelling() {
+        let output = "[usb|script] pm3 --> lf t55xx detect\n\
+             [=]  Chip type......... T55x7\n\
+             [=]  Modulation........ ASK\n\
+             [=]  Bit rate.......... 5 - RF/64\n\
+             [=]  Inverted.......... No\n\
+             [=]  Offset............ 33\n\
+             [=]  Seq. terminator... Yes\n\
+             [=]  Block0............ 00148040 (auto detect)\n\
+             [=]  Downlink mode..... default/fixed bit length\n\
+             [=]  Password set...... No\n";
+        let st = parse_t5577_detect(output);
+        assert!(st.detected, "T55x7 spelling must count as detected");
+        assert_eq!(st.chip_type, "T55x7");
+        assert_eq!(st.block0.as_deref(), Some("00148040"));
+        assert!(!st.password_set);
+    }
+
+    /// The chip name alone must be enough, with no reliance on the surrounding
+    /// label text -- some firmware builds capitalise or pad the label differently.
+    #[test]
+    fn parse_t5577_detect_chipname_without_label() {
+        let st = parse_t5577_detect("Chip type......... T55x7\nBlock0............ 00148040\n");
+        assert!(st.detected);
+    }
+
+    /// A genuinely absent tag must still be reported as not detected, so we have
+    /// not simply made the check permissive.
+    #[test]
+    fn parse_t5577_detect_absent_tag_is_not_detected() {
+        let st = parse_t5577_detect("[=] no tag found\n[=] Chip type......... \n");
+        assert!(!st.detected, "no chip type must not be reported as detected");
+
+let empty = parse_t5577_detect("");
+        assert!(!empty.detected);
     }

@@ -8,6 +8,10 @@ interface ErrorStepProps {
   recoveryAction?: RecoveryAction | null;
   errorSource?: 'scan' | 'write' | 'detect' | 'verify' | 'blank' | null;
   onRetry: () => void;
+  /** Retry the write itself, keeping the source card and connection. */
+  onRetryWrite?: () => void;
+  /** Plain Back: previous step, keeping the device connection. */
+  onBack?: () => void;
   onReset: () => void;
 }
 
@@ -34,12 +38,19 @@ const DETECT_HINTS = [
   'Antivirus may block proxmark3.exe — add it to exceptions',
 ];
 
-export function ErrorStep({ message, recoverable, recoveryAction, errorSource, onRetry, onReset }: ErrorStepProps) {
+export function ErrorStep({ message, recoverable, recoveryAction, errorSource, onRetry, onRetryWrite, onBack, onReset }: ErrorStepProps) {
   const sfx = useSfx();
 
   const displayMessage = message || 'An unexpected error occurred.';
   const retryLabel = getRetryLabel(recoveryAction, errorSource);
   const showDetectHints = errorSource === 'detect' && !message?.includes('firmware');
+  // A write/blank failure gets a dedicated retry that re-attempts the write with
+  // the source card intact. Every other recoverable failure keeps the generic
+  // retry path.
+  const retryAction =
+    recoveryAction === 'Retry' && (errorSource === 'write' || errorSource === 'blank')
+      ? 'retryWrite'
+      : 'generic';
 
   return (
     <TerminalPanel title="ERROR">
@@ -65,8 +76,37 @@ export function ErrorStep({ message, recoverable, recoveryAction, errorSource, o
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '12px' }}>
-          {recoverable && (
+        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+          {/* Retryable failures (write/blank) go back to the blank step so the
+              write can be attempted again immediately. It deliberately does NOT
+              softReset: that clears the source card and forces a full rescan,
+              which is why a failed write previously never retried. */}
+          {recoverable && retryAction === 'retryWrite' && onRetryWrite && (
+            <button
+              onClick={() => { sfx.action(); onRetryWrite(); }}
+              style={{
+                background: 'var(--bg-void)',
+                color: 'var(--amber)',
+                border: '2px solid var(--amber)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '13px',
+                fontWeight: 600,
+                padding: '6px 20px',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                sfx.hover();
+                e.currentTarget.style.background = 'rgba(255, 184, 0, 0.08)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--bg-void)';
+              }}
+            >
+              RETRY WRITE
+            </button>
+          )}
+
+          {recoverable && retryAction !== 'retryWrite' && (
             <button
               onClick={() => { sfx.action(); onRetry(); }}
               style={{
@@ -88,6 +128,33 @@ export function ErrorStep({ message, recoverable, recoveryAction, errorSource, o
               }}
             >
               {retryLabel}
+            </button>
+          )}
+
+          {/* Always offer Back: return to the previous step without dropping the
+              device connection or discarding the source card. */}
+          {onBack && (
+            <button
+              onClick={() => { sfx.action(); onBack(); }}
+              style={{
+                background: 'var(--bg-void)',
+                color: 'var(--green-bright)',
+                border: '2px solid var(--green-bright)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '13px',
+                fontWeight: 600,
+                padding: '6px 20px',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(e) => {
+                sfx.hover();
+                e.currentTarget.style.background = 'var(--green-ghost)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'var(--bg-void)';
+              }}
+            >
+              BACK
             </button>
           )}
 

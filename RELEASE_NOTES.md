@@ -1,5 +1,91 @@
 # Phosphor 2.2 GUI - Release Notes
 
+## v2.2.1 — Retry & Navigation Fixes (October 2026)
+
+> Navigation and write-retry fixes on top of v2.2.0. All v2.2.0 scan, parse and
+> write fixes are unchanged and still included. **This is a patch release — if you
+> are on any earlier build, take this one instead.**
+
+### Fixed: a failed write could never be retried in place
+
+After a failed write, pressing RETRY dropped the app back to the **scan** screen
+and discarded the source card. The user then had to re-scan the source and walk
+the whole wizard again just to retry one write that had failed on the target.
+
+Cause: RETRY was wired to a soft reset, which clears the card fields along with
+the error. The Rust state machine's `Error + Retry` transition targeted `Idle` for
+the same reason.
+
+Now a retryable write or blank failure returns to the **blank** step, keeping the
+source card (including any T55xx config blocks), the detected card type and the
+device connection. A new **RETRY WRITE** button is offered specifically for
+write and blank failures, distinct from the generic retry.
+
+### Fixed: a failed verification had no way out but starting over
+
+On a failed verification the only options were RESET (discard everything) or
+DISCONNECT (unplug the device). There was no route back to the step that failed.
+Failed verification is now retryable in place, on the same terms as above.
+
+### New: BACK after a successful clone
+
+The completion screen offered only "clone another" or "disconnect" — there was no
+way to go back a step while staying connected. A **BACK** button now returns to
+the blank step with the device still connected and the source card still loaded,
+so you can clone again or correct a mistake. RESET and DISCONNECT remain as the
+deliberate "start over" and "unplug" choices.
+
+### Fixed: T5577 blank detection missed the chip spelling PM3 actually prints
+
+A blank on a PM3 Easy was reported as *"Place the correct blank"* even with a
+blank sitting on the reader.
+
+Cause: the `detected` check matched the literal strings `T55xx` / `T5577` /
+`T5555` / the `Chip type` label, but Iceman actually prints the chip as **`T55x7`
+— lowercase `x`**. That spelling matched none of the chip strings, so detection
+depended entirely on the surrounding label text. Any firmware build that formats
+the label differently reported a false "no blank detected", which surfaces as a
+blank-type restriction rather than a detection failure.
+
+Detection now accepts a T55xx-family chip name (`T55xx`, `T55x7`, `T5577`,
+`T5555`) with or without the label, so it no longer depends on label formatting.
+A genuinely absent tag is still correctly reported as not detected, and a label
+printed with an empty value is no longer mistaken for a detected blank.
+
+Verified against a real iCopy-X capture (COM19, Iceman v4.23346):
+
+```
+[=]  Chip type......... T55x7
+[=]  Block0............ 00148040 (auto detect)
+```
+
+### Verification
+- `cargo test --lib` — **363 passed, 0 failed**
+- `npx tsc --noEmit` — clean
+- 8 new regression tests covering the retry/back transitions and the T55xx
+  detection spellings
+
+### Release artifacts
+
+| Asset | Size | SHA-256 |
+|-------|------|---------|
+| `Phosphor_2.2.1_x64-setup.exe` | 65,720,678 | `c2308fe1bdc05b5d79d75450dff680405881b75ec2c08a82e42a101ecf273913` |
+| `Phosphor_2.2_GUI_v2.2.1_Windows_Portable.zip` | 111,447,164 | `344755ca55baac22f8314ce5fe29b76c45f04d3234e580abdf2c4a7d4cfe7019` |
+
+- `phosphor.exe` inside both artifacts reports FileVersion `2.2.1`,
+  SHA-256 `210082e288989fc9e4c9cf4ce81cffec6d31f7986a11f5f5631c0e09f187a958`
+- Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
+  build, `CAPABILITIES_VERSION 11`, unchanged from v2.2.0. `build_portable.ps1`
+  aborts rather than package an unverified client.
+
+### Known limitation (unchanged in this release)
+
+A T5577 blank that is **not detected by the reader at all** still reports
+"Place the correct blank". That is a genuine RF/detection failure, not a
+blank-type restriction — the app is telling you the reader found nothing. Check
+that the blank is seated flat on the antenna and, on a PM3 Easy, that the
+antenna is connected.
+
 ## v2.2.0 — PM3 v4.23346 Alignment (September 2026)
 
 > **This build supersedes four earlier v2.2.0 uploads.** If you downloaded

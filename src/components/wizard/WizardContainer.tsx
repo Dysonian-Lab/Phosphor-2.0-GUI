@@ -214,6 +214,7 @@ export function WizardContainer() {
             cardData={wizard.context.cardData}
             timestamp={wizard.context.completionTimestamp}
             onReset={wizard.softReset}
+            onBack={wizard.back}
             onDisconnect={wizard.disconnect}
           />
         );
@@ -225,6 +226,8 @@ export function WizardContainer() {
              recoveryAction={wizard.context.errorRecoveryAction}
              errorSource={wizard.context.errorSource}
              onRetry={wizard.softReset}
+             onRetryWrite={wizard.retryWrite}
+             onBack={wizard.back}
              onReset={wizard.reset}
            />
         );
