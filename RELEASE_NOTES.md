@@ -285,7 +285,7 @@ so on.
 - Firmware built with `make fullimage PLATFORM=PM3RDV4 [PLATFORM_EXTRAS=...]`.
 
 ### Verification
-- `cargo test --lib` — **338 passed, 0 failed** (328 prior + 10 new)
+- `cargo test --lib` — **342 passed, 0 failed** (338 prior + 4 new)
 - `npx tsc --noEmit` — clean
 - `npm run tauri build` — SUCCESS (NSIS installer + portable ZIP)
 - Device verified on v4.23346, **iCopy-X** (`hw version` reports
@@ -297,17 +297,17 @@ so on.
 
 | Asset | Size | SHA-256 |
 |-------|------|---------|
-| `Phosphor_2.2.0_x64-setup.exe` | 65,735,615 | `2b19f8c140b10d9dfdecd957ca234c4d3473e81abdea3aabf4cee020fc4cc43f` |
-| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,442,787 | `2b9b6ffbdc80b63ccde0f0a1e12d87181f8217f4a3c02080d08ab740bbd0d10d` |
+| `Phosphor_2.2.0_x64-setup.exe` | 65,715,461 | `54f4273dd0f94e20f201c7dcd037c86473fde8e09bb4f5fcf05bff1b74be058d` |
+| `Phosphor_2.2_GUI_v2.2.0_Windows_Portable.zip` | 111,446,885 | `ccac0790bbbeec88faac9bc35f4a32380de35830c4e6dcb864c9d5b8bf5c19d7` |
 
-- `phosphor.exe` inside both artifacts: 20,051,456 bytes,
-  SHA-256 `3cbb9d61e1b171d37bb36ae727baae7ffa6b5fcd55d6b39e91383e00a2fe65d6`
+- `phosphor.exe` inside both artifacts: 20,076,032 bytes,
+  SHA-256 `592be47a4826f8a4cbbabf70134e24021dd7d61a9db4e2f970417e6c4d040167`
 - Bundled PM3 client: SHA-256 prefix `F7BA073E30F6` — the hardware-verified
   build, `CAPABILITIES_VERSION 11`. A locally rebuilt client (prefix
   `B444910108AD`) fails against real hardware with
   `Received packet frame with invalid CRC` and is never packaged.
   `build_portable.ps1` aborts rather than package an unverified client.
-- Source: commit `106330d`, tagged `v2.2.0`.
+- Source: commit `336a9ee`, tagged `v2.2.0`.
 
 ## v2.1.0 — iCopy-X ICS Decoder Support (August 2026)
 - PM3 client rebuilt with iCopy-X patches.
