@@ -38,17 +38,19 @@ pub fn emit_output(app: &AppHandle, text: &str, is_error: bool) {
 // Also append to the debug log file so the developer can inspect it
     // after the fact without needing to watch the live terminal.
     //
-    // This was previously implemented by scanning the log directory for the
-    // highest existing number on EVERY call. `read_stream_with_timeout` calls
-    // this once per output chunk, so a long attack was O(n^2) in directory
-    // entries and did blocking `std::fs` work on the async runtime. A counter
-    // in an atomic makes it O(1).
+    // `read_stream_with_timeout` calls this once per output chunk, so this must
+    // stay cheap: no directory scan, no blocking work on the async runtime.
+    //
+    // The counter MUST be seeded from the existing maximum, or it restarts at 1
+    // every launch and silently OVERWRITES the oldest logs. That regression
+    // shipped once already: files 001.md-010.md were replaced with new content
+    // while the rest of the directory kept its original high numbers.
     //
     // The location is overridable with PHOSPHOR_PM3_LOG_DIR; the default is a
     // developer path and only resolves on the build machine. These files
     // contain card UIDs and recovered keys, so they must never be shipped or
     // synced with the release bundle.
-    static NEXT_LOG_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    static NEXT_LOG_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let log_dir = std::env::var("PHOSPHOR_PM3_LOG_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| {
@@ -57,6 +59,21 @@ pub fn emit_output(app: &AppHandle, text: &str, is_error: bool) {
     if std::fs::create_dir_all(&log_dir).is_err() {
         return;
     }
+    // One directory scan per process, not per chunk.
+    static SEEDED: std::sync::Once = std::sync::Once::new();
+    SEEDED.call_once(|| {
+        let mut max = 0u32;
+        if let Ok(entries) = std::fs::read_dir(&log_dir) {
+            for entry in entries.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if let Ok(n) = name.trim_end_matches(".md").parse::<u32>() {
+                        max = max.max(n);
+                    }
+                }
+            }
+        }
+        NEXT_LOG_ID.store(max + 1, std::sync::atomic::Ordering::Relaxed);
+    });
     let id = NEXT_LOG_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = log_dir.join(format!("{:03}.md", id));
     let Ok(mut f) = std::fs::File::create(&path) else {
@@ -188,6 +205,90 @@ static PORT_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// -10. Callers that can interpret partial detections (the scan wizard) set this
 /// to true so the output survives and the parser decides. Everyone else keeps the
 /// strict error path.
+/// True for a `lf t55xx` subcommand that touches tag memory (`read`, `write`,
+/// `dump`) and therefore requires the auto-detect prelude.
+fn is_t55xx_memory_cmd(cmd: &str) -> bool {
+    let mut parts = cmd.trim().split_whitespace();
+    parts.next() == Some("lf")
+        && parts.next() == Some("t55xx")
+        && matches!(parts.next(), Some("read" | "write" | "dump"))
+}
+
+/// Guard against command-chaining injection, with one deliberate exception.
+///
+/// `proxmark3 -c` treats `;` as a command delimiter, so rejecting `;`
+/// outright is the right default and must stay that way: it is what stops
+/// unvalidated input from running a second command.
+///
+/// The exception is `lf t55xx detect; <lf t55xx read|write|dump>`, which is not
+/// a convenience but a hard requirement of the client. Verified on hardware
+/// 2026-10-01, same card on COM19:
+///
+///   lf t55xx read -b 0                  -> exit -16 (EWRONGANSWER), empty table
+///   lf t55xx detect; lf t55xx read -b 0 -> exit 0, `00 | 000880E0`
+///   lf t55xx dump                        -> exit 0, empty tables (SILENT!)
+///   lf t55xx detect; lf t55xx dump      -> exit 0, all 8 blocks read
+///
+/// `lf t55xx detect` is what auto-detects modulation, bit rate, offset and the
+/// sequence-terminator flag, and that state exists only inside the running
+/// client process. Phosphor spawns a fresh `proxmark3.exe` per command, so that
+/// state was destroyed between calls: every T55xx read returned an empty table
+/// and the app reported the card as "blank". Matching the modulation by hand
+/// (`lf t55xx config --ASK --rate 32 -o 33 --st -c <block0>`) does NOT fix it
+/// -- the read still returned -16. Only the same-process chain works.
+///
+/// The allowance is deliberately narrow: exactly two segments, the first pinned
+/// to the literal `lf t55xx detect`, the second restricted to the three
+/// memory-reading verbs. Any other `;` is still rejected.
+fn is_safe_pm3_command_chain(cmd: &str) -> bool {
+    if cmd.contains('\n') || cmd.contains('\r') {
+        return false;
+    }
+    if !cmd.contains(';') {
+        return true;
+    }
+    let segments: Vec<&str> = cmd.split(';').map(str::trim).collect();
+    segments.len() == 2
+        && segments[0] == "lf t55xx detect"
+        && is_t55xx_memory_cmd(segments[1])
+}
+
+/// Run a `lf t55xx` memory command with the `lf t55xx detect` prelude that the
+/// client requires.
+///
+/// Use this INSTEAD of `run_command` for every `lf t55xx read` / `write` /
+/// `dump`. Calling them bare returns an empty table (or -16) even when the card
+/// reads perfectly well, which is what made every T5577 look blank.
+///
+/// The returned output contains the `detect` preamble followed by the real
+/// command's output. Parsers select on the result table, so they are unaffected.
+pub async fn run_t55xx_memory_command(
+    app: &AppHandle,
+    port: &str,
+    cmd: &str,
+) -> Result<String, AppError> {
+    if !is_t55xx_memory_cmd(cmd) {
+        return Err(AppError::CommandFailed(format!(
+            "Not a T55xx memory command: {}",
+            cmd
+        )));
+    }
+    // Safe: both halves are validated above, and `is_safe_pm3_command_chain`
+    // permits precisely this shape.
+    let chained = format!("lf t55xx detect; {}", cmd.trim());
+    emit_output(app, &format!("pm3 --> {}", chained), false);
+    match execute_pm3(app, port, &chained, PM3_COMMAND_TIMEOUT, true).await {
+        Ok(output) => {
+            emit_output(app, &output, false);
+            Ok(output)
+        }
+        Err(e) => {
+            emit_output(app, &e.to_string(), true);
+            Err(e)
+        }
+    }
+}
+
 async fn execute_pm3(
     app: &AppHandle,
     port: &str,
@@ -200,20 +301,24 @@ async fn execute_pm3(
         return Err(AppError::CommandFailed(format!("Invalid port: {}", port)));
     }
 
-    // Reject command strings containing PM3 command separators or newlines.
+// Reject command strings containing PM3 command separators or newlines.
     // The PM3 CLI's `-c` flag treats `;` as a delimiter, so a crafted value
     // like "AA;lf t55xx wipe" would execute two commands. Block this at the
     // chokepoint so no caller can accidentally pass through unsanitised input.
-    if cmd.contains(';') || cmd.contains('\n') || cmd.contains('\r') {
+    //
+    // The single exception is `lf t55xx detect; <memory cmd>` -- see
+    // `is_safe_pm3_command_chain`. Arbitrary chaining stays blocked.
+    if !is_safe_pm3_command_chain(cmd) {
         return Err(AppError::CommandFailed(
             "Invalid characters in command".into(),
         ));
     }
-if port.contains(';') || port.contains('\n') || port.contains('\r') {
+    if port.contains(';') || port.contains('\n') || port.contains('\r') {
         return Err(AppError::CommandFailed(
             "Invalid characters in command".into(),
         ));
     }
+
 
     // One PM3 process at a time per machine. Held for the whole spawn so a
     // concurrent invocation cannot open the same COM port.
@@ -1525,7 +1630,7 @@ fn extract_short_version(version_str: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{friendly_exit_code, interpret_pm3_result, is_banner_only, is_card_dependent, pm3_error_line, rejected_command};
+    use super::{friendly_exit_code, interpret_pm3_result, is_banner_only, is_card_dependent, is_safe_pm3_command_chain, is_t55xx_memory_cmd, pm3_error_line, rejected_command};
 
     /// Verbatim PM3 output for `lf t55xx danger raw`. Exit code 0.
     #[test]
@@ -1698,6 +1803,66 @@ dump             Dump MIFARE Classic tag to binary file\n";
         assert_eq!(pm3_error_line("[+] all good\n"), None);
         // A bare marker with no text is not a usable message.
         assert_eq!(pm3_error_line("[!!]\n"), None);
+    }
+
+    /// Only the one deliberate chain is permitted. Everything else containing
+    /// `;` is still rejected as injection.
+    #[test]
+    fn only_the_t55xx_detect_chain_is_allowed() {
+        // The required chain and its three memory verbs.
+        assert!(is_safe_pm3_command_chain("lf t55xx detect; lf t55xx read -b 0"));
+        assert!(is_safe_pm3_command_chain("lf t55xx detect; lf t55xx dump"));
+        assert!(is_safe_pm3_command_chain("lf t55xx detect; lf t55xx write -b 0 -d 00000000 --verify"));
+        // Plain single commands are untouched.
+        assert!(is_safe_pm3_command_chain("hf 14a info"));
+        assert!(is_safe_pm3_command_chain("lf t55xx detect"));
+        // Injection still blocked.
+        assert!(!is_safe_pm3_command_chain("AA;lf t55xx wipe"));
+        assert!(!is_safe_pm3_command_chain("hf 14a info; hf mf dump"));
+        assert!(!is_safe_pm3_command_chain("lf t55xx detect; lf t55xx wipe"));
+        assert!(!is_safe_pm3_command_chain("lf t55xx detect; hw version"));
+        assert!(!is_safe_pm3_command_chain("lf t55xx detect; lf t55xx read -b 0; hf mf dump"));
+        assert!(!is_safe_pm3_command_chain("lf t55xx read -b 0\nhf mf dump"));
+    }
+
+    #[test]
+    fn t55xx_memory_command_classification() {
+        assert!(is_t55xx_memory_cmd("lf t55xx read -b 0"));
+        assert!(is_t55xx_memory_cmd("lf t55xx dump"));
+        assert!(is_t55xx_memory_cmd("lf t55xx write -b 1 -d 11223344 --verify"));
+        // Not memory commands -- these must NOT get the prelude.
+        assert!(!is_t55xx_memory_cmd("lf t55xx detect"));
+        assert!(!is_t55xx_memory_cmd("lf t55xx chk"));
+        assert!(!is_t55xx_memory_cmd("lf t55xx wipe"));
+        assert!(!is_t55xx_memory_cmd("lf t55xx config"));
+        assert!(!is_t55xx_memory_cmd("lf search"));
+    }
+
+    /// Verbatim output of `lf t55xx detect; lf t55xx dump` from the live
+    /// client on COM19, 2026-10-01. Run bare, `lf t55xx dump` exits 0 with
+    /// completely empty tables; the app reported that as "blank card".
+    #[test]
+    fn chained_dump_output_parses() {
+        let out = "[=]  Chip type......... T55x7\n\
+[=]  Modulation........ ASK\n\
+[=]  Bit rate.......... 2 - RF/32\n\
+[=]  Block0............ 000880E0 (auto detect)\n\
+\n\
+[=] ------------------------- T55xx tag memory -----------------------------\n\
+[+] Page 0\n\
+[+] blk | hex data | binary                           | ascii\n\
+[+] ----+----------+----------------------------------+-------\n\
+[+]  00 | 000880E0 | 00000000000010001000000011100000 | ....\n\
+[+]  01 | 00000000 | 00000000000000000000000000000000 | ....\n";
+        assert!(out.contains("000880E0"));
+        // The detect preamble must not confuse the block parser.
+        let block = super::super::output_parser::parse_t55xx_read_block(out);
+        assert_eq!(block, Some("000880E0".to_string()));
+    }
+
+    #[test]
+    fn t55xx_memory_commands_are_card_dependent() {
+        assert!(is_card_dependent("lf t55xx detect; lf t55xx read -b 0"));
     }
 
     /// -4 is PM3_ETIMEOUT. It used to be reported as "Invalid argument", which

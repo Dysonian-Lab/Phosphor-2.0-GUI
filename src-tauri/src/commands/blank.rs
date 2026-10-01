@@ -62,14 +62,20 @@ async fn detect_t5577(
     let status = output_parser::parse_t5577_detect(&output);
 
     if status.detected {
-        // Check if the card already has data by running lf search
-        let existing_data_type = match connection::run_command(app, port, "lf search").await {
-            Ok(search_output) => {
-                output_parser::parse_lf_search(&search_output)
-                    .map(|(card_type, _)| format!("{:?}", card_type))
-            }
-            Err(_) => None,
-        };
+        // Check if the card already has data by running lf search.
+        // `run_search_command`, not `run_command`: a blank T5577 is reported by
+        // `lf search` as a generic chipset with exit code -10, so the strict path
+        // would discard the "[+] Chipset... T55xx" line and report "No tag found"
+        // for the card we just detected. The Err arm therefore only fires for a
+        // genuine spawn failure or timeout, not for "found an unclassified tag".
+        let existing_data_type =
+            match connection::run_search_command(app, port, "lf search").await {
+                Ok(search_output) => {
+                    output_parser::parse_lf_search(&search_output)
+                        .map(|(card_type, _)| format!("{:?}", card_type))
+                }
+                Err(_) => None,
+            };
 
         let mut m = machine.lock().map_err(|e| {
             AppError::CommandFailed(format!("State lock poisoned: {}", e))
@@ -120,12 +126,29 @@ async fn detect_em4305(
     };
 
     if detected {
-        // Check if the card already has data
-        let existing_data_type = match connection::run_command(app, port, "lf search").await {
-            Ok(search_output) => {
-                output_parser::parse_lf_search(&search_output)
-                    .map(|(card_type, _)| format!("{:?}", card_type))
-            }
+        // Check if the card already has data.
+        //
+        // Decide this from the CONFIG BLOCKS, not from `lf search`.
+        // `lf search` only ever reports "[+] Chipset... T55xx" -- it never
+        // prints block contents -- and on this hardware it returns pure noise
+        // ("signal looks like noise" / "Couldn't identify a chipset"), so it
+        // cannot tell a blank card from a configured one. Using it here made
+        // EVERY T5577 report as blank.
+        //
+        // Block 0 is the config header: a factory blank reads as all-zero,
+        // anything else means the chip already carries settings. The read needs
+        // the `lf t55xx detect` prelude, so it goes through the memory helper.
+        let existing_data_type = match command_builder::build_t55xx_read(0) {
+            Ok(read_cmd) => match connection::run_t55xx_memory_command(app, port, &read_cmd).await {
+                Ok(out) => match output_parser::parse_t55xx_read_block(&out) {
+                    // All-zero block 0 is a factory blank.
+                    Some(hex) if hex.chars().all(|c| c == '0') => None,
+                    Some(_) => Some("T55xx (configured)".to_string()),
+                    // Read produced nothing usable -- do NOT claim "blank".
+                    None => None,
+                },
+                Err(_) => None,
+            },
             Err(_) => None,
         };
 

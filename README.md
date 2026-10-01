@@ -50,16 +50,32 @@ Proxmark3 firmware v4.23346+ recommended (tested with Iceman fork v4.23346). Pho
 
 ### iCopy-X
 
-Phosphor is **verified working with iCopy-X hardware running the lab-401
-[icopy-x v1.1.6](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6)
-firmware**, both as a client over USB CDC and for the full card-reading feature
-set. This was tested on a physical iCopy-X on COM19.
+Phosphor is **verified working with iCopy-X hardware**, tested on a physical
+iCopy-X on COM19 over USB CDC running the lab-401 **icopy-x v1.1.6**
+open-source firmware (the `icopy-x-flash.ipk` variant).
 
-> ⚠️ **Flashing an iCopy-X is not done from Phosphor.** The bundled firmware
-> images cover `rdv4`, `rdv4-bt`, `generic` and `generic-256` only; Phosphor
-> does not detect iCopy-X and falls back to the `generic` variant. To flash or
-> update an iCopy-X, follow the official method:
-> **[lab-401/icopy-x releases — v1.1.6](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6)**
+That variant ships the Proxmark module as **Iceman v4.23346**
+(`CAPABILITIES_VERSION 11`), which is exactly what Phosphor bundles and what it
+is verified against. Client and firmware feature versions must match or the
+Proxmark refuses to talk.
+
+> ⚠️ **Phosphor does not update or flash an iCopy-X.**
+>
+> Updating an iCopy-X is an **IPK update performed on the device**, not a
+> Proxmark firmware flash from the desktop. Per
+> [lab-401/icopy-x](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6):
+>
+> 1. Ensure the device is on firmware 1.0.90
+> 2. Put the iCopy-X into **PC-Mode**
+> 3. Delete **all other** IPK files from the device
+> 4. Transfer the IPK, then close PC-Mode
+> 5. On the device: **About → Update**, press OK
+> 6. Using the `flash` variant, the device offers to flash the Proxmark
+>    firmware — accept it
+>
+> Use **`icopy-x-flash.ipk`** (Iceman v4.23346, matching Phosphor), not
+> `icopy-x-noflash.ipk` (which leaves the factory Proxmark in place and will not
+> match Phosphor's client).
 
 ## How to run on a clean Windows machine
 

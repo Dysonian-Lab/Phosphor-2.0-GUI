@@ -279,7 +279,17 @@ async fn write_t5577_flow(
                 None => cmd,
             };
             log::debug!("sending={}", final_cmd);
-            let clone_output = connection::run_command(app, port, &final_cmd).await;
+            // A `lf t55xx write` is a memory command and must be chained after
+            // `lf t55xx detect` in the same client process, or it silently does
+            // nothing on the card. Anything else keeps the plain path.
+            let clone_output = if final_cmd.starts_with("lf t55xx ")
+                && !final_cmd.starts_with("lf t55xx chk")
+                && !final_cmd.starts_with("lf t55xx config")
+            {
+                connection::run_t55xx_memory_command(app, port, &final_cmd).await
+            } else {
+                connection::run_command(app, port, &final_cmd).await
+            };
             log::debug!("clone_result={:?}", clone_output.as_ref().map(|s| s.chars().take(500).collect::<String>()).map_err(|e| e.to_string()));
             let clone_output = clone_output?;
             // Check for failure indicators in PM3 output
@@ -519,7 +529,12 @@ pub async fn verify_clone(
     // Use generic `lf search` for verification — parse_lf_search is designed to parse
     // its output format. Type-specific readers (lf hid reader, etc.) produce different
     // output that parse_lf_search can't handle, causing false verification failures.
-    let verify_output = connection::run_command(&app, &port, "lf search").await?;
+    //
+    // `run_search_command`, not `run_command`: `lf search` on a T55xx ALWAYS exits -10,
+    // after printing `[-] No known 125/134 kHz tags found!` and `[+] Chipset... T55xx`.
+    // The strict path throws the stdout away on any non-zero exit, so verification of a
+    // perfectly good T5577 died with "No tag found running: lf search".
+    let verify_output = connection::run_search_command(&app, &port, "lf search").await?;
 
     // Use detailed verification if decoded fields are available
     let (success, mismatched) = if let Some(ref decoded) = source_decoded {

@@ -136,9 +136,11 @@ async fn enrich_t55xx_data(
             Err(_) => break,
         };
 
-        // `run_search_command` keeps output on a non-zero exit: a blank block
-        // exits -7 but still prints the table, and that is expected here.
-        let out = match connection::run_search_command(app, port, &cmd).await {
+        // `run_t55xx_memory_command` prepends the `lf t55xx detect` that the
+        // client requires: run bare, `lf t55xx read -b N` returns an empty
+        // table even when the card reads fine, which is what made every T5577
+        // report "blocks: none (blank or unprogrammed chip)".
+        let out = match connection::run_t55xx_memory_command(app, port, &cmd).await {
             Ok(o) => o,
             Err(_) => continue,
         };

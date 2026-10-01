@@ -20,6 +20,44 @@ only the `DeviceConnected` state carries a port. Scanning moves the state to
 to the persistent connection record, matching the other 20 command modules
 that already worked.
 
+### Fixed: every T55xx card reported itself as blank — and could not be written
+
+The most serious defect in this release. T5577 detection worked, but **every read
+of a T55xx returned nothing**, so a card that was present and readable was
+reported as *"blank"*, and writes to it silently did nothing.
+
+Root cause: `lf t55xx read` and `lf t55xx dump` **only return data when
+`lf t55xx detect` has already run in the same client process.** Detect is what
+auto-detects the modulation, bit rate, offset and sequence-terminator flag, and
+that state exists only inside the running client. Phosphor starts a fresh
+`proxmark3.exe` for each command, so the state was destroyed between calls.
+
+Measured on an iCopy-X with the same card, seconds apart:
+
+| Command | Result |
+|---|---|
+| `lf t55xx read -b 0` | exit **-16**, empty table |
+| `lf t55xx detect; lf t55xx read -b 0` | exit 0, `00 \| 000880E0` |
+| `lf t55xx dump` | exit **0**, completely empty tables |
+| `lf t55xx detect; lf t55xx dump` | exit 0, all 8 blocks read |
+
+Three things made this hard to see:
+
+- `lf t55xx dump` **exits 0 with empty tables**, which looked like a successful
+  read of an empty card rather than a failure.
+- Setting the modulation by hand (`lf t55xx config --ASK --rate 32 -o 33 --st`)
+  did **not** help — the read still returned -16. Only the same-process chain works.
+- The blank/unconfigured decision was being made from `lf search`, which never
+  prints block contents, so it could not distinguish a blank card from a
+  configured one.
+
+All T55xx `read` / `write` / `dump` operations now run behind the required
+`lf t55xx detect` prelude, and blank-vs-configured is decided by reading block 0
+(all-zero means a factory blank).
+
+T5577 detection reported the card correctly even before this fix — the card was
+never the problem.
+
 ### Fixed: a missing card was reported as a blank success
 
 > **Note:** the first attempt at this fix, included in the 30 Sep (earlier)
@@ -108,9 +146,12 @@ blank success.
 Tested against a physical **iCopy-X** running the lab-401 **icopy-x v1.1.6**
 firmware, on COM19 over USB CDC.
 
-> ⚠️ Flashing an iCopy-X is not done from Phosphor — the bundled images do not
-> include PM3ICOPYX firmware and Phosphor does not detect iCopy-X. Use the
-> official method:
+> ⚠️ **Phosphor does not update or flash an iCopy-X.** Updating an iCopy-X is
+> an **IPK update on the device itself** (PC-Mode → transfer IPK → About →
+> Update), not a Proxmark firmware flash from the desktop. Use
+> `icopy-x-flash.ipk`, which ships Iceman v4.23346 (`CAPABILITIES_VERSION 11`)
+> to match the client Phosphor bundles; `icopy-x-noflash.ipk` leaves the factory
+> Proxmark in place and will not match. Full steps:
 > [lab-401/icopy-x releases — v1.1.6](https://github.com/lab-401/icopy-x/releases/tag/v1.1.6)
 
 ### New: DESFire Advanced panel (full `hf mfdes`)
